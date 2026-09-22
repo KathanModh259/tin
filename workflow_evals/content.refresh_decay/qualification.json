@@ -1,0 +1,193 @@
+{
+  "version": 1,
+  "assumptions": [
+    "Cases are author proposals against synthetic Search Console shapes. A live run needs a project-owned analytics.gsc connection with a selected property and a named payer; none is included here.",
+    "One Search Console property per saved workflow. Two equal-length windows of 14-90 days, ending at least three days before today so late-arriving data is excluded. Position is compared impression-weighted, never as an average of averages.",
+    "Every provider response is bounded by row_limit and a 64000-byte cap, so a response can be censored. A censored response bounds coverage; it never establishes that a page or query is absent.",
+    "Run success establishes that an artifact was delivered. A useful report additionally requires that each reported page carries exactly one verdict and the figures that selected it."
+  ],
+  "cost_drivers": [
+    "One bounded Codex session at the existing pinned model pricing and spending ceiling. No managed-model routes are declared. The configured ceiling is not an expected price.",
+    "At most eight analytics.gsc calls including sites.list, each response capped at 64000 bytes, 900 seconds of runtime and one 192000-byte report.",
+    "Agent work scales with the number of pages considered, the size of the query mix and how much earlier-report continuity exists, not with the site's traffic.",
+    "Search Console is free and quota-limited by Google; it is not metered by Tin. Measured model cost requires verified usage from an authorized run, which this file does not contain."
+  ],
+  "effects": [
+    "Read-only sites.list and search_analytics.read through the project's existing analytics.gsc connection. The property is chosen on the connection, never by the run.",
+    "One run-owned reports/content-refresh/<run_id>.md in project state, delivered through ordinary Files, Activity and immutable run history.",
+    "No page fetches, no content edits, no redirects, no Search Console changes, no email or publication, no workflow activation. Consolidation and retargeting are recommendations a human acts on."
+  ],
+  "cases": [
+    {
+      "id": "self_competition_beats_decay",
+      "description": "Two published pages each hold a quarter or more of the impressions on four shared queries, and both lost clicks. The self-competition rule outranks the decay rule, so the pair is consolidated rather than rewritten.",
+      "inputs": {
+        "window_days": 28,
+        "as_of_utc": "2026-01-12",
+        "maturation_days": 90,
+        "max_pages": 15,
+        "exclude_paths": "",
+        "page_notes": "Both guides were published in 2024 and cover overlapping ground.",
+        "seasonality_notes": ""
+      },
+      "expected_status": "succeeded",
+      "expect": {
+        "contains": [
+          "consolidate",
+          "keeper",
+          "impression share",
+          "not reversible"
+        ],
+        "excludes": [
+          "delete the page",
+          "retire"
+        ]
+      }
+    },
+    {
+      "id": "flat_position_is_not_decay",
+      "description": "A page lost more than a third of its clicks while impression-weighted position held within 1.5 points. The report must send the operator to the result page rather than ask for a rewrite.",
+      "inputs": {
+        "window_days": 28,
+        "as_of_utc": "2026-01-12",
+        "maturation_days": 90,
+        "max_pages": 15,
+        "exclude_paths": "",
+        "page_notes": "",
+        "seasonality_notes": ""
+      },
+      "expected_status": "succeeded",
+      "expect": {
+        "contains": [
+          "investigate the result page",
+          "the ranking survived"
+        ],
+        "excludes": [
+          "rewrite this page",
+          "refresh the copy"
+        ]
+      }
+    },
+    {
+      "id": "censored_response_bounds_the_verdicts",
+      "description": "The page response returns exactly its row limit, so coverage is partial. Status must be partial, affected pages must fall to insufficient evidence, and no page may be called absent.",
+      "inputs": {
+        "window_days": 28,
+        "as_of_utc": "2026-01-12",
+        "maturation_days": 90,
+        "max_pages": 40,
+        "exclude_paths": "",
+        "page_notes": "",
+        "seasonality_notes": ""
+      },
+      "expected_status": "succeeded",
+      "expect": {
+        "contains": [
+          "Status: partial",
+          "insufficient evidence",
+          "censored"
+        ],
+        "excludes": [
+          "Status: complete",
+          "has no traffic",
+          "has no impressions"
+        ]
+      }
+    },
+    {
+      "id": "young_pages_are_not_judged",
+      "description": "A page first observed inside the maturation window is reported as too young to judge, with the date it becomes judgeable, rather than as decayed.",
+      "inputs": {
+        "window_days": 28,
+        "as_of_utc": "2026-01-12",
+        "maturation_days": 90,
+        "max_pages": 15,
+        "exclude_paths": "",
+        "page_notes": "The pricing comparison went live six weeks ago.",
+        "seasonality_notes": ""
+      },
+      "expected_status": "succeeded",
+      "expect": {
+        "contains": [
+          "too young",
+          "becomes judgeable"
+        ],
+        "excludes": [
+          "refresh"
+        ]
+      }
+    },
+    {
+      "id": "named_seasonality_is_not_decay",
+      "description": "A fall the operator already explained in seasonality_notes is attributed to that cause and moved to leave alone, instead of generating work.",
+      "inputs": {
+        "window_days": 28,
+        "as_of_utc": "2026-01-12",
+        "maturation_days": 90,
+        "max_pages": 15,
+        "exclude_paths": "",
+        "page_notes": "",
+        "seasonality_notes": "December is always quiet for us and the holiday campaign ended on the 20th."
+      },
+      "expected_status": "succeeded",
+      "expect": {
+        "contains": [
+          "leave alone (explained)"
+        ],
+        "excludes": [
+          "unexplained decline"
+        ]
+      }
+    },
+    {
+      "id": "missing_property_is_a_diagnostic",
+      "description": "The connection exists but no Search Console property is selected. The run writes a diagnostic report naming the missing selection and makes no verdicts.",
+      "inputs": {
+        "window_days": 28,
+        "as_of_utc": "",
+        "maturation_days": 90,
+        "max_pages": 15,
+        "exclude_paths": "",
+        "page_notes": "",
+        "seasonality_notes": ""
+      },
+      "expected_status": "succeeded",
+      "expect": {
+        "contains": [
+          "Status: diagnostic",
+          "property"
+        ],
+        "excludes": [
+          "consolidate",
+          "refresh"
+        ]
+      }
+    }
+  ],
+  "rubric": [
+    {
+      "id": "one-verdict-per-page",
+      "question": "Does every reported page carry exactly one verdict, with the rule number that produced it and the figures that satisfied that rule?"
+    },
+    {
+      "id": "weighted-position",
+      "question": "Are positions combined impression-weighted rather than as an average of averages, and is that stated where positions are compared?"
+    },
+    {
+      "id": "anonymized-remainder",
+      "question": "Does the report state, per reported page, how much of its impressions the query rows fail to account for, instead of treating the shortfall as an error?"
+    },
+    {
+      "id": "censoring-disclosed",
+      "question": "Is every censored response named, with the verdicts that depend on it marked provisional, and is absence never inferred from a censored or failed request?"
+    },
+    {
+      "id": "refusals-are-specific",
+      "question": "Is the section on what the report cannot tell you written for this run, naming actual merged URLs, remainders and composition shifts, rather than reusable boilerplate?"
+    },
+    {
+      "id": "no-retirement",
+      "question": "Does the report stop at retarget and decline to recommend deleting a page, on the stated grounds that it cannot see links, conversions or revenue?"
+    }
+  ]
+}

@@ -1,0 +1,154 @@
+{
+  "package_format": "tin-workflow-package-v1",
+  "definition": {
+    "key": "content.refresh_decay",
+    "title": "Refresh the content that stopped working",
+    "description": "Read Search Console for the pages already published, separate real decay from seasonality, SERP change and self-competition, and give every page one verdict: refresh, consolidate, retarget, retire or leave alone.",
+    "version": "1.0.0",
+    "executor": "codex.procedure",
+    "schedule_modes": [
+      "on_demand",
+      "weekly"
+    ],
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project_id"
+      ],
+      "properties": {
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "window_days": {
+          "type": "integer",
+          "minimum": 14,
+          "maximum": 90,
+          "default": 28,
+          "title": "Comparison window (days)",
+          "description": "Each window is this long. The report compares the most recent complete window with the one immediately before it.",
+          "x-tin-ui": {
+            "control": "number",
+            "order": 10
+          }
+        },
+        "as_of_utc": {
+          "type": "string",
+          "maxLength": 10,
+          "default": "",
+          "title": "Optional UTC end date, exclusive",
+          "description": "Leave blank to roll forward on every run. A fixed date keeps a scheduled run reproducible but stops it tracking new data.",
+          "x-tin-ui": {
+            "control": "text",
+            "order": 20
+          }
+        },
+        "maturation_days": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 365,
+          "default": 90,
+          "title": "Leave pages alone until they are this old",
+          "description": "A page younger than this is still establishing. It is reported as too young to judge rather than as decayed.",
+          "x-tin-ui": {
+            "control": "number",
+            "order": 30
+          }
+        },
+        "max_pages": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 40,
+          "default": 15,
+          "title": "How many pages to give a verdict",
+          "x-tin-ui": {
+            "control": "number",
+            "order": 40
+          }
+        },
+        "exclude_paths": {
+          "type": "string",
+          "maxLength": 2000,
+          "default": "",
+          "title": "Optional path prefixes to leave out",
+          "description": "One prefix per line, for example /docs/ or /legal/. Pages under these prefixes are excluded before ranking.",
+          "x-tin-ui": {
+            "control": "textarea",
+            "order": 50
+          }
+        },
+        "page_notes": {
+          "type": "string",
+          "maxLength": 2000,
+          "default": "",
+          "title": "Optional page intent, publication dates and last refresh dates",
+          "description": "Plain prose. Anything you say about when a page was published, last updated, or what it is meant to do.",
+          "x-tin-ui": {
+            "control": "textarea",
+            "order": 60
+          }
+        },
+        "seasonality_notes": {
+          "type": "string",
+          "maxLength": 2000,
+          "default": "",
+          "title": "Optional known seasonality, launches or campaigns",
+          "description": "Plain prose. Anything that already explains a rise or fall in this window.",
+          "x-tin-ui": {
+            "control": "textarea",
+            "order": 70
+          }
+        }
+      }
+    },
+    "integration_requirements": [
+      {
+        "provider_key": "analytics.gsc",
+        "capabilities": [
+          "sites.list",
+          "search_analytics.read"
+        ],
+        "required": true
+      }
+    ],
+    "human_review": {
+      "eligible": true,
+      "reason": "Consolidating or retiring a published page is irreversible for search traffic and should be read before anyone acts on it.",
+      "summary": "Verdicts on published pages, with the evidence behind each one.",
+      "review_label": "Review the page verdicts"
+    },
+    "procedure": {
+      "prompt_path": "PROMPT.md",
+      "skills_path": "skills",
+      "skill_files": [
+        "skills/content-refresh/SKILL.md",
+        "skills/content-refresh/SEARCH_CONSOLE.md",
+        "skills/content-refresh/DECISIONS.md",
+        "skills/content-refresh/REPORT.md"
+      ],
+      "entry_skill": "content-refresh",
+      "workspace": {
+        "kind": "project.state"
+      },
+      "sandbox": {
+        "profile": "isolated",
+        "egress": "fenced",
+        "timeout_seconds": 900
+      },
+      "services": {
+        "search": {
+          "provider_key": "analytics.gsc",
+          "max_calls": 8,
+          "max_response_bytes": 64000
+        }
+      },
+      "output": {
+        "kind": "project.artifact",
+        "media_type": "text/markdown",
+        "max_bytes": 192000,
+        "path_template": "reports/content-refresh/{run_id}.md"
+      }
+    }
+  }
+}
