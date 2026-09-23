@@ -1,0 +1,145 @@
+{
+  "version": 1,
+  "assumptions": [
+    "No declared service or fixture-replayable API is involved; the agent's own web search supplies evidence, so the cases below check the report's contract and input handling, not live venue facts.",
+    "Live qualification of whether picked venues have a genuinely open, correctly dated call and accurate requirements needs an explicitly authorized live case; nothing here fixture-replays that.",
+    "Static checking runs every case's inputs through the declared input_schema; cases only cover inputs that are schema-valid, since a schema-level rejection is already guaranteed by the schema itself."
+  ],
+  "cost_drivers": [
+    "One bounded Codex session on the existing pinned model pricing and spending ceiling; no managed-model routes are declared. The configured 900-second runtime ceiling is not an expected price.",
+    "Cost scales with how many candidate venues must be searched and verified before max_venues survives; a narrow, well-specified expertise needs fewer searches than a vague one."
+  ],
+  "effects": [
+    "One project.artifact write to reports/SPEAKING_SHORTLIST.md; no other project files change.",
+    "No provider mutation, no submitting, applying, emailing or otherwise acting toward any venue, no outbound email, publication or credential access, no recursive workflow start."
+  ],
+  "cases": [
+    {
+      "id": "ordinary",
+      "description": "A specific, well-scoped expertise with no exclusions, no format preference, and the default max_venues.",
+      "inputs": {
+        "expertise": "How we cut our Postgres bill 40% by fixing three slow query patterns, aimed at backend engineers at small SaaS companies.",
+        "format_preference": "no_preference",
+        "already_pitched": "",
+        "max_venues": 10,
+        "tone_notes": ""
+      },
+      "expected_status": "succeeded",
+      "expect": {
+        "contains": [
+          "Status:",
+          "Deadline:",
+          "Fit:",
+          "Requirements:",
+          "Drafted pitch:",
+          "## Excluded candidates"
+        ],
+        "excludes": [
+          "Status: no venues verified"
+        ]
+      }
+    },
+    {
+      "id": "format_preference_narrows_to_podcasts",
+      "description": "Restricting to podcast_guest must exclude conference and meetup CFPs from the ranked list.",
+      "inputs": {
+        "expertise": "How we cut our Postgres bill 40% by fixing three slow query patterns, aimed at backend engineers at small SaaS companies.",
+        "format_preference": "podcast_guest",
+        "already_pitched": "",
+        "max_venues": 10,
+        "tone_notes": ""
+      },
+      "expected_status": "succeeded",
+      "expect": {
+        "contains": [
+          "Status:",
+          "Deadline:",
+          "## Excluded candidates"
+        ]
+      }
+    },
+    {
+      "id": "already_pitched_excluded",
+      "description": "A named venue is pre-excluded; it must not appear as a ranked pick.",
+      "inputs": {
+        "expertise": "How we cut our Postgres bill 40% by fixing three slow query patterns, aimed at backend engineers at small SaaS companies.",
+        "format_preference": "no_preference",
+        "already_pitched": "PGConf",
+        "max_venues": 10,
+        "tone_notes": ""
+      },
+      "expected_status": "succeeded",
+      "expect": {
+        "contains": [
+          "Status:",
+          "## Excluded candidates"
+        ],
+        "excludes": [
+          "## PGConf"
+        ]
+      }
+    },
+    {
+      "id": "narrow_expertise_no_padding",
+      "description": "An intentionally obscure expertise, to check the report discloses a short list honestly instead of padding it to max_venues.",
+      "inputs": {
+        "expertise": "Restoring and re-tuning one specific discontinued 1987 Soviet marine radio model, aimed at the handful of collectors who still repair them.",
+        "format_preference": "no_preference",
+        "already_pitched": "",
+        "max_venues": 10,
+        "tone_notes": ""
+      },
+      "expected_status": "succeeded",
+      "expect": {
+        "contains": [
+          "Status:",
+          "## Excluded candidates"
+        ]
+      }
+    },
+    {
+      "id": "tight_cap",
+      "description": "The minimum allowed max_venues, to check the cap is respected rather than treated as a target.",
+      "inputs": {
+        "expertise": "How we cut our Postgres bill 40% by fixing three slow query patterns, aimed at backend engineers at small SaaS companies.",
+        "format_preference": "no_preference",
+        "already_pitched": "",
+        "max_venues": 3,
+        "tone_notes": "Keep it plain and specific, no hype language."
+      },
+      "expected_status": "succeeded",
+      "expect": {
+        "contains": [
+          "Status:",
+          "## Excluded candidates"
+        ]
+      }
+    }
+  ],
+  "rubric": [
+    {
+      "id": "deadline_accuracy",
+      "question": "Is every included venue's deadline an exact date sourced from that venue's own CFP or apply page, not a secondhand aggregator or a stale past-year page?"
+    },
+    {
+      "id": "requirement_fit",
+      "question": "Does each drafted pitch actually fit the venue's stated length limit and submission format, rather than a generic one-size pitch?"
+    },
+    {
+      "id": "specificity",
+      "question": "Does each pitch reference a concrete detail from the venue's own page (its theme, a past talk or episode, its stated audience) proving it was actually read?"
+    },
+    {
+      "id": "honesty",
+      "question": "Are claims, credentials and speaking history in each pitch real and traceable to project context, with no fabricated results or availability?"
+    },
+    {
+      "id": "restraint",
+      "question": "Are already_pitched venues and the wrong format correctly excluded, is the ranked list capped at max_venues, and does the report disclose honestly when fewer venues survive verification instead of padding the list?"
+    },
+    {
+      "id": "scope",
+      "question": "Does the run only write the declared report, with no attempt to submit, apply, email, or otherwise act toward any venue?"
+    }
+  ]
+}
