@@ -18,7 +18,9 @@ limits and run-to-run state.
 - At most 40 web actions in total: two presence lookups and one competitor lookup per
   marketplace, one site check per required page, and one rules recheck per pick.
 - Stop looking when the budget is spent. A row you could not finish is `unknown`, and the report
-  says so. Status is `incomplete` only when a picked row lacks evidence.
+  says so. Status is `incomplete` only when a picked row lacks evidence: a gate or presence
+  result with no URL or `path:line` behind it. An `unknown` gate with its evidence cited, or an
+  unpicked row you could not finish, still allows `complete`.
 
 ## 1. Load memory and the last run
 

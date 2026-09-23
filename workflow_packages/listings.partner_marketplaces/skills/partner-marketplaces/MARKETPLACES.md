@@ -53,6 +53,8 @@ Fields in each entry:
   - working support link or email and valid publisher contact (small)
   - a stated pricing plan; free plans are allowed (small)
   - publicly available; no invite-only or preview access (large)
+  - Marketplace API webhook events for plan changes and cancellations, free listings too
+    (large: needs code in the app)
   - paid plans only: 100 GitHub App installations or 200 OAuth app users, and a verified
     publisher organisation (large)
 - **Form**: listing name at most 255 characters; very short description 40 to 80 characters, no
