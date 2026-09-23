@@ -267,12 +267,13 @@ def case(case_id):
 
 
 def test_the_real_tin_report_passes_the_ordinary_case(scoring):
-    # Evidence collected by hand on 2026-09-23 following the skill; see the PR description.
+    # Output of hosted run 450c9353 on 2026-09-23, the second run on the same project.
     text = fixture_text("tin_2026-09-23.md")
     result = assess_output(case("ordinary"), status="succeeded", content=text.encode("utf-8"))
     assert result["status"] == "passed", result["checks"]
     state = re.search(r"```tin-listings-state\n(.*?)\n```", text, re.S).group(1)
-    assert scoring["read_state"](json.loads(state))["rows"]["github"]["picked_runs"] == 1
+    assert scoring["read_state"](json.loads(state))["rows"]["github"]["picked_runs"] == 2
+    assert "Recommended again: github (2 runs)" in text
     assert len(text.split("## Shelf check", 1)[0]) < 6000
 
 
