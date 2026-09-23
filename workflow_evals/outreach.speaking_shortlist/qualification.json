@@ -41,7 +41,7 @@
     },
     {
       "id": "format_preference_narrows_to_podcasts",
-      "description": "Restricting to podcast_guest must exclude conference and meetup CFPs from the ranked list.",
+      "description": "Restricting to podcast_guest must exclude conference and meetup CFPs from the ranked list, and since most podcasts take pitches on a rolling basis, Deadline: should read as rolling rather than force a fabricated date.",
       "inputs": {
         "expertise": "How we cut our Postgres bill 40% by fixing three slow query patterns, aimed at backend engineers at small SaaS companies.",
         "format_preference": "podcast_guest",
@@ -119,7 +119,11 @@
   "rubric": [
     {
       "id": "deadline_accuracy",
-      "question": "Is every included venue's deadline an exact date sourced from that venue's own CFP or apply page, not a secondhand aggregator or a stale past-year page?"
+      "question": "Is every dated venue's deadline an exact date sourced from that venue's own CFP or apply page, not a secondhand aggregator or a stale past-year page?"
+    },
+    {
+      "id": "rolling_handling",
+      "question": "For a podcast or other venue with no fixed deadline, is it correctly recorded as rolling with a verified-open date, rather than given a fabricated deadline or dropped from the list for lacking one?"
     },
     {
       "id": "requirement_fit",
