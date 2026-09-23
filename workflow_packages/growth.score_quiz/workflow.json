@@ -1,0 +1,83 @@
+{
+  "package_format": "tin-workflow-package-v1",
+  "definition": {
+    "key": "growth.score_quiz",
+    "title": "Draft an embeddable score quiz",
+    "description": "Draft a self-contained, dependency-free scored quiz widget founders can paste onto their own site: a few questions, an instant personalized verdict, and a call to action. A free interactive tool is a lead magnet, not another article or email. Draft only; the widget is not deployed anywhere.",
+    "version": "1.0.0",
+    "executor": "workflow.code",
+    "schedule_modes": ["on_demand"],
+    "human_review": {
+      "eligible": true,
+      "summary": "Review the quiz questions, scoring and copy before embedding it anywhere."
+    },
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "project_id": { "type": "string", "format": "uuid" },
+        "product_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "title": "Product name"
+        },
+        "quiz_topic": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "title": "What the quiz scores",
+          "description": "The question a visitor wants answered about themselves, e.g. \"is your API ready for production traffic\"."
+        },
+        "audience": {
+          "type": "string",
+          "maxLength": 200,
+          "default": "developers evaluating this space",
+          "title": "Who should take it"
+        },
+        "signup_url": {
+          "type": "string",
+          "format": "uri",
+          "minLength": 10,
+          "maxLength": 500,
+          "title": "Where the CTA sends people"
+        },
+        "voice_notes": {
+          "type": "string",
+          "maxLength": 1000,
+          "default": "",
+          "title": "Optional voice notes"
+        }
+      },
+      "required": ["project_id", "product_name", "quiz_topic", "signup_url"]
+    },
+    "code": {
+      "runtime": "python3.12.8-stdlib-v1",
+      "entrypoint": "main.py",
+      "files": ["main.py"],
+      "timeout_seconds": 60,
+      "model_routes": {
+        "design_quiz": {
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "max_calls": 1,
+          "max_input_bytes": 8000,
+          "max_output_tokens": 2200
+        },
+        "write_result_copy": {
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "max_calls": 1,
+          "max_input_bytes": 8000,
+          "max_output_tokens": 400
+        }
+      },
+      "output": {
+        "kind": "project.artifact",
+        "path": "reports/SCORE_QUIZ.md",
+        "media_type": "text/markdown",
+        "max_bytes": 16000
+      }
+    }
+  }
+}
