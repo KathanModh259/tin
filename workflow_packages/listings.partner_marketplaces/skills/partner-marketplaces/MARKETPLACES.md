@@ -55,11 +55,16 @@ Fields in each entry:
   - publicly available; no invite-only or preview access (large)
   - paid plans only: 100 GitHub App installations or 200 OAuth app users, and a verified
     publisher organisation (large)
-- **Form**: name, short description, full description, logo, feature card, screenshots, pricing
-  plan, support and privacy URLs. The requirements page states no character limits.
+- **Form**: listing name at most 255 characters; very short description 40 to 80 characters, no
+  ending punctuation, not repeating the name; introductory description 150 to 250 characters,
+  starting with the app name; detailed description at most 1,000 characters as 3 to 5 sections
+  with level-three headings; primary and optional secondary category; logo at least 200x200 with
+  no text; feature card 965x482; up to 5 screenshots at least 1200px wide; customer support URL,
+  privacy policy URL, and a setup URL for GitHub Apps; pricing plan.
 - **Review**: GitHub reviews every new listing; no time stated.
 - **Effort**: 1 for a free listing, 3 for paid.
-- **Rules source**: https://docs.github.com/en/apps/github-marketplace/creating-apps-for-github-marketplace/requirements-for-listing-an-app
+- **Rules source**: https://docs.github.com/en/apps/github-marketplace/creating-apps-for-github-marketplace/requirements-for-listing-an-app and
+  https://docs.github.com/en/apps/github-marketplace/listing-an-app-on-github-marketplace/writing-a-listing-description-for-your-app
 
 ## google_workspace — Google Workspace Marketplace
 
@@ -165,7 +170,7 @@ Fields in each entry:
 - **Review**: automated scans, live testing and human review; no time stated.
 - **Effort**: 3
 - **Rules source**: https://docs.stripe.com/stripe-apps/publish-app and
-  https://docs.stripe.com/stripe-apps/listing-guidelines
+  https://docs.stripe.com/stripe-apps/review-requirements
 
 ## vercel — Vercel Marketplace
 

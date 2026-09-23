@@ -256,6 +256,11 @@ def test_report_layout_and_skill_agree_on_the_state_block():
         assert heading in report
 
 
+def fixture_text(name):
+    # Normalise line endings so a Windows checkout (core.autocrlf) reads the same as CI.
+    return (FIXTURES / name).read_bytes().decode("utf-8").replace("\r\n", "\n")
+
+
 def case(case_id):
     contract = Qualification.model_validate(json.loads(CASES.read_text(encoding="utf-8")))
     return next(item for item in contract.cases if item.id == case_id)
@@ -263,10 +268,9 @@ def case(case_id):
 
 def test_the_real_tin_report_passes_the_ordinary_case(scoring):
     # Evidence collected by hand on 2026-09-23 following the skill; see the PR description.
-    report = (FIXTURES / "tin_2026-09-23.md").read_bytes()
-    result = assess_output(case("ordinary"), status="succeeded", content=report)
+    text = fixture_text("tin_2026-09-23.md")
+    result = assess_output(case("ordinary"), status="succeeded", content=text.encode("utf-8"))
     assert result["status"] == "passed", result["checks"]
-    text = report.decode("utf-8")
     state = re.search(r"```tin-listings-state\n(.*?)\n```", text, re.S).group(1)
     assert scoring["read_state"](json.loads(state))["rows"]["github"]["picked_runs"] == 1
     assert len(text.split("## Shelf check", 1)[0]) < 6000
@@ -283,3 +287,44 @@ def test_a_plausible_but_unusable_report_fails_the_ordinary_case(scoring):
     stripe = row("stripe", shape="vendor_side")
     assert scoring["score"](stripe)["score"] is None
     assert scoring["score"](row(presence="unknown"))["score"] is None
+
+
+def test_equal_scores_go_to_the_shorter_review_even_against_alphabetical_order(scoring):
+    rows = [row("notion", effort=2, review_days=50), row("slack", effort=2, review_days=10)]
+    picks, _ = scoring["pick"](rows, 2)
+    assert [r["marketplace"] for r in picks] == ["slack", "notion"]
+
+
+def test_copy_exactly_at_the_limit_fits(scoring):
+    assert scoring["fit"]("x" * 30, 30)["ok"] is True
+    assert scoring["fit"]("x" * 31, 30)["ok"] is False
+
+
+def test_only_real_changes_are_reported_between_runs(scoring):
+    previous = scoring["read_state"](
+        {
+            "version": 1,
+            "rows": {
+                "mcp_registry": {"presence": "listed", "picked_runs": 0},
+                "github": {"presence": "absent", "picked_runs": 0},
+            },
+        }
+    )
+    rows = [row("mcp_registry", presence="listed"), row("github")]
+    picks, ranked = scoring["pick"](rows, 1)
+    state, changes = scoring["next_state"](previous, ranked, picks)
+    # Listed before and still listed is not news; a first-time pick is not "still waiting".
+    assert changes["went_live"] == []
+    assert changes["still_waiting"] == []
+    assert state["rows"]["github"]["picked_runs"] == 1
+
+
+def test_limits_in_the_tin_report_come_from_the_reference_file():
+    reference = (RESOURCES / "MARKETPLACES.md").read_text(encoding="utf-8")
+    github = reference.split("## github — ", 1)[1].split("\n## ", 1)[0]
+    report = fixture_text("tin_2026-09-23.md")
+    table = report.split("### 1. GitHub Marketplace", 1)[1].split("### 2.", 1)[0]
+    limits = {int(n) for n in re.findall(r"\| \d+ / (\d+) \|", table)}
+    assert limits == {80, 250, 255, 1000}
+    for limit in limits:
+        assert f"{limit:,}" in github or str(limit) in github, limit
