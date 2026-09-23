@@ -630,9 +630,7 @@ def render(now, settings, analysis):
     target, avoid, leading = decision.get("target"), decision.get("avoid"), decision.get("leading")
     currency, days = analysis["primary_currency"], settings["retention_days"]
     overall = analysis["overall"]
-    lines = [
-        "# Who pays and stays",
-        "",
+    header = [
         f"Status: {decision['status']}",
         f"Generated: {now.astimezone(UTC).strftime('%Y-%m-%d %H:%M')} UTC",
         f"Stayed means: still paying {days} days after the first paid day; trial days do not "
@@ -641,9 +639,9 @@ def render(now, settings, analysis):
         "run.",
     ]
     if analysis["livemode"] == {False}:
-        lines.append("Data: Stripe TEST MODE. These are not real customers.")
+        header.append("Data: Stripe TEST MODE. These are not real customers.")
     elif analysis["livemode"] == {True, False}:
-        lines.append("Data: a mix of live and test-mode subscriptions. Check the connected key.")
+        header.append("Data: a mix of live and test-mode subscriptions. Check the connected key.")
     excluded = analysis["records_excluded"]
     coverage = (
         f"Read {analysis['fetched']} subscriptions in {len(analysis['requests'])} requests "
@@ -655,12 +653,16 @@ def render(now, settings, analysis):
         coverage += (
             " Older subscriptions exist that this run could not read; the sample is the newest."
         )
-    lines += [coverage, "", "## The answer", ""]
-    lines += answer(decision, analysis, settings, target, avoid, leading, overall, currency)
+    # One item per line in Markdown; single newlines would merge them into one paragraph.
+    lines = ["# Who pays and stays", "", *[f"- {item}" for item in [*header, coverage]]]
+    lines += ["", "## The answer", ""]
+    lines += paragraphs(
+        answer(decision, analysis, settings, target, avoid, leading, overall, currency)
+    )
     lines += ["", f"## Keep rate by segment ({days}-day)", ""]
     lines += segment_table(tests, currency, overall)
     lines += ["", "## Why customers left", ""]
-    lines += departures(analysis["departures"])
+    lines += paragraphs(departures(analysis["departures"]))
     if decision["status"] != "insufficient evidence":
         lines += ["", "## Hand-off to other Tin workflows", ""]
         lines += handoff(decision, analysis, settings, target, avoid, leading)
@@ -675,6 +677,10 @@ def render(now, settings, analysis):
         "",
     ]
     return "\n".join(lines)
+
+
+def paragraphs(items):
+    return [line for item in items for line in (item, "")][:-1]
 
 
 def answer(decision, analysis, settings, target, avoid, leading, overall, currency):

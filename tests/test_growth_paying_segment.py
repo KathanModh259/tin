@@ -322,6 +322,9 @@ async def test_ordinary_account_names_who_to_aim_at_and_hands_it_off():
     )
     assert "Status: complete" in content
     assert "Data: Stripe TEST MODE" in content
+    # Markdown merges single-newline lines; each finding must stay its own block.
+    assert "\n- Status: complete\n- Generated:" in content
+    assert "\n\nAim at:" in content and "\n\nStop paying to acquire:" in content
     assert "Aim at: people who sign up with a work email. 80% of them stayed" in content
     assert "Stop paying to acquire: people who sign up with a personal email" in content
     # Annual billing is a lever on the offer, never the acquisition target.
