@@ -138,6 +138,27 @@ async def test_calls_both_steps_and_renders_a_bounded_markdown_artifact():
     assert len(data["questions"]) == 4
     assert data["max_possible"] == 3 + 3 + 3 + 3
     assert data["signup_url"] == GOOD_INPUTS["signup_url"]
+    assert content.startswith("# Loopwire score quiz\n")
+    assert (
+        "_Scores: API rate-limit readiness. Aimed at developers evaluating this space._" in content
+    )
+
+
+async def test_rejects_an_answer_label_cut_off_at_its_length_limit():
+    module, _ = _load()
+    # Strict structured output stops at maxLength mid-sentence instead of failing.
+    clipped = ("We monitor delivery outcomes and backlog " * 5)[:160]
+    question = _question("How would you notice failures?", (0, "We wouldn't"), (3, clipped))
+    context, _ = _context(quiz={**GOOD_QUIZ, "questions": [question, *GOOD_QUIZ["questions"][1:]]})
+    with pytest.raises(ValueError, match="cut off"):
+        await module.run(context, GOOD_INPUTS)
+
+
+async def test_rejects_result_copy_cut_off_at_its_length_limit():
+    module, _ = _load()
+    context, _ = _context(result={**GOOD_RESULT, "cta_line": "x" * 200})
+    with pytest.raises(ValueError, match="cut off"):
+        await module.run(context, GOOD_INPUTS)
 
 
 async def test_rejects_a_non_https_signup_url():
