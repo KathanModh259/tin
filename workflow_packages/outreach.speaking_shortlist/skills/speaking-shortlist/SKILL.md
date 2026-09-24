@@ -48,8 +48,11 @@ applies, submits, emails, or otherwise acts toward any venue on its own.
    says everything failed:
    - `Status:` `complete` if at least one venue survived verification, otherwise
      `no venues verified`
-   - `Verdict:` set by counting the venues that survived step 3 — a count, not a judgment call:
-     `fit` if 3 or more survived, `thin` if 1 or 2 survived, `not a fit` if none survived
+   - `Verdict:` followed by exactly one of these three words and nothing else on that line — no
+     summary, no venue count, no explanation, just the single word or phrase: `fit`, `thin`, or
+     `not a fit`. Choose it by counting the venues that survived step 3 — a count, not a judgment
+     call: `fit` if 3 or more survived, `thin` if 1 or 2 survived, `not a fit` if none survived.
+     For example, if 7 venues survived, the line reads exactly `Verdict: fit`.
 
    Then one section per venue, in ranked order, each with these exact labels so the result stays
    checkable:
