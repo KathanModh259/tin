@@ -370,7 +370,7 @@ async def test_activity_recovers_partial_ack_then_reports_failure(publication_db
     assert "quoted spending maximum" in receipt.error_message
 
 
-def test_frozen_reader_skips_old_missing_oversize_and_linked_files(tmp_path):
+def test_frozen_reader_skips_old_missing_oversize_and_linked_files(tmp_path, make_symlink):
     root = tmp_path / "checkout"
     root.mkdir()
     subprocess.run(["git", "init", str(root)], check=True, capture_output=True)  # noqa: S603,S607
@@ -410,7 +410,7 @@ def test_frozen_reader_skips_old_missing_oversize_and_linked_files(tmp_path):
     assert read() == b""
     target = tmp_path / "secret"
     target.write_text("must not read")
-    output.symlink_to(target)
+    make_symlink(output, target)
     assert read() == b""
     output.unlink()
     output.hardlink_to(target)

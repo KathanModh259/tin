@@ -90,12 +90,12 @@ async def test_a_broken_contribution_is_refused(tmp_path, break_it, expected):
         await validate(ContributedPackage(key=KEY, path=package_path), root=tmp_path)
 
 
-async def test_a_symlinked_resource_is_refused(tmp_path):
+async def test_a_symlinked_resource_is_refused(tmp_path, make_symlink):
     package_path = stage(tmp_path)
     outside = tmp_path / "outside.md"
     outside.write_text("Content the package does not own.\n")
     (package_path / "PROMPT.md").unlink()
-    (package_path / "PROMPT.md").symlink_to(outside)
+    make_symlink(package_path / "PROMPT.md", outside)
     with pytest.raises(ValueError, match="symlink"):
         await validate(ContributedPackage(key=KEY, path=package_path), root=tmp_path)
 
@@ -125,12 +125,12 @@ async def test_missing_manifests_do_not_disappear(tmp_path, missing):
 
 
 @pytest.mark.parametrize("broken", [False, True])
-async def test_symlinked_packages_do_not_disappear(tmp_path, broken):
+async def test_symlinked_packages_do_not_disappear(tmp_path, broken, make_symlink):
     stage(tmp_path)
     target = tmp_path / "workflow_packages" / KEY
     if broken:
         target = tmp_path / "does-not-exist"
-    (tmp_path / "workflow_packages" / "growth.link").symlink_to(target)
+    make_symlink(tmp_path / "workflow_packages" / "growth.link", target)
     results = {package.key: error for package, error in await validate_all(tmp_path)}
     assert results[KEY] is None
     assert "symlink" in str(results["growth.link"])
@@ -207,7 +207,7 @@ async def test_community_check_does_not_apply_private_only_policies(tmp_path):
 
 
 @pytest.mark.parametrize("shape", ["missing_root", "missing_folder", "file", "symlink"])
-async def test_bad_roots_fail_with_a_cli_diagnostic(tmp_path, capsys, shape):
+async def test_bad_roots_fail_with_a_cli_diagnostic(tmp_path, capsys, shape, make_symlink):
     from tin_lite.cli import _validate_community
 
     root = tmp_path
@@ -216,7 +216,7 @@ async def test_bad_roots_fail_with_a_cli_diagnostic(tmp_path, capsys, shape):
     elif shape == "file":
         (root / "workflow_packages").write_text("not a folder")
     elif shape == "symlink":
-        (root / "workflow_packages").symlink_to(tmp_path)
+        make_symlink(root / "workflow_packages", tmp_path)
     with pytest.raises(SystemExit) as error:
         await _validate_community(root)
     assert error.value.code == 1
