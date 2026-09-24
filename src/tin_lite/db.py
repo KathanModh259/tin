@@ -654,6 +654,34 @@ class Database:
             raise LookupError("integration connection does not exist")
         return _integration_connection(row)
 
+    async def update_integration_credential(
+        self,
+        *,
+        project_id: UUID,
+        provider_key: str,
+        connection_id: UUID,
+        credential_ciphertext: bytes,
+        credential_key_version: str,
+    ) -> bool:
+        """Replace only the stored credential, for token rotation under the refresh lock.
+
+        Configuration, status and selections are untouched, so a run's pinned binding survives.
+        Returns False when the connection was replaced or removed meanwhile.
+        """
+        result = await (borrowed_connection(self) or self.pool).execute(
+            """
+            UPDATE integration_connections
+            SET credential_ciphertext = $4, credential_key_version = $5, updated_at = now()
+            WHERE project_id = $1 AND provider_key = $2 AND id = $3
+            """,
+            project_id,
+            provider_key,
+            connection_id,
+            credential_ciphertext,
+            credential_key_version,
+        )
+        return result == "UPDATE 1"
+
     async def mark_integration_attention(
         self, *, project_id: UUID, provider_key: str, error_code: str
     ) -> None:
@@ -790,17 +818,20 @@ class Database:
         token_hash: str,
         provider_key: str,
         clerk_user_id: str,
+        include_used: bool = False,
     ) -> IntegrationAuthAttempt | None:
+        # include_used lets a repeated OAuth callback find the attempt it already completed.
         row = await self.pool.fetchrow(
             """
             SELECT * FROM integration_auth_attempts
             WHERE token_hash = $1 AND provider_key = $2
-              AND clerk_user_id = $3 AND used_at IS NULL
+              AND clerk_user_id = $3 AND ($4 OR used_at IS NULL)
               AND expires_at > now()
             """,
             token_hash,
             provider_key,
             clerk_user_id,
+            include_used,
         )
         return _integration_auth_attempt(row) if row else None
 

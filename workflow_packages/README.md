@@ -21,6 +21,12 @@ founder again. Before adding inputs, read these:
   founder's voice.
 - Outputs of earlier runs, such as the keyword plan, the organic audit and the signup walkthrough.
 
+For revenue or product data, bind the first-party read-only connections rather than a custom
+API: `payments.stripe` (subscriptions, customers, invoices, prices, charges) and
+`analytics.posthog` (bounded HogQL and definitions). They return small projected records with
+cursor paging, and `tests/connection_fakes.py` serves them offline; see
+[Stripe and PostHog connections](../docs/stripe-and-posthog-connections.md).
+
 Declare what you read as `recommended` prerequisites so the dashboard and MCP show readiness.
 A procedure writes only its declared output. A weekly package keeps its history in a
 `path_template` report ending in a JSON evidence block, which the next run reads back.
@@ -32,8 +38,8 @@ A procedure writes only its declared output. A weekly package keeps its history 
 | `competitor.watch` | its last report, keyword plan and ads competitors, Feature map | `content.public_article`, `content.plan`, `research.deep_dive` | Pricing and packaging |
 | `qa.buyer_trust` | signup walkthrough, Feature map, onboarding plan | `site.health_improve` (code), founder (policy, host) | Conversion and trust |
 | `growth.score_quiz` | Feature map, style guide (filled in by the agent) | founder embeds the widget | Conversion and trust |
-| `product.analytics_brief` | PostHog API connection | its next scheduled brief | Product-led growth |
-| `outreach.paying_segment` | Stripe API connection, onboarding plan | `outreach.email_shortlist`, `organic.keyword_plan`, `ads.assessment` inputs | Cold outbound, pricing |
+| `product.analytics_brief` | PostHog connection (`analytics.posthog`) | its next scheduled brief | Product-led growth |
+| `outreach.paying_segment` | Stripe connection (`payments.stripe`), onboarding plan | `outreach.email_shortlist`, `organic.keyword_plan`, `ads.assessment` inputs | Cold outbound, pricing |
 | `outreach.speaking_shortlist` | Feature map, onboarding plan, style guide, its earlier reports | founder submits | Earned media, community |
 | `outreach.syllabus_placement` | Feature map, onboarding plan, style guide, its earlier reports | founder sends | Partnerships and channel |
 | `outreach.campus_events` | onboarding plan, Feature map, style guide | founder pitches the organizer | Community and events |
@@ -63,9 +69,11 @@ See [code workflows](../docs/code-workflows.md) and
 ## Codex procedure example
 
 [PostHog funnel](example.posthog_funnel/workflow.json) is a complete connection example:
-a bounded procedure uses `procedure.services` and a project-owned custom API key through
-Tin's gateway. It is not registered or live-qualified. See [API connections](../docs/project-api-connections.md)
-for secure setup, permissions, limits and evaluation requirements. A binding's
+a bounded procedure uses `procedure.services` to call the first-party `analytics.posthog`
+operations through Tin's gateway. It is not registered or live-qualified. See
+[Stripe and PostHog connections](../docs/stripe-and-posthog-connections.md) for the operations,
+HogQL rules and offline fakes, and [API connections](../docs/project-api-connections.md) for
+bindings, limits and evaluation requirements. A binding's
 `max_response_bytes` bounds how much data one call can return; for Search Console that is a few
 hundred rows per page, with `start_row` paging and `dimension_filters` to narrow the read.
 Its [HogQL resource](example.posthog_funnel/skills/posthog-funnel/HOGQL.md) supplies a reusable
@@ -76,6 +84,8 @@ remains separately authorized.
 The [synthetic SQL fixture](../tests/fixtures/posthog_funnel/ordered.sql) and its paired response
 preserve a provider-dialect regression case for ties, duplicates, mixed attempts, missing steps
 and exact medians. CI checks the generated query against that baseline without contacting PostHog.
+Its synthetic events CTE uses `UNION ALL`, which Tin's HogQL guard refuses for ordinary calls;
+the test builds a guard-compliant CTE with `arrayJoin` for the gateway path.
 
 Use this shape when the workflow needs a bounded agent run. Private trials of procedure
 packages remain manual, not scheduled.

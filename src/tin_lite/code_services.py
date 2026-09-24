@@ -8,10 +8,15 @@ from datetime import UTC, datetime
 
 import httpx
 
+from tin_lite import posthog_connection, stripe_connection
 from tin_lite.billing_contracts import digest
+from tin_lite.connection_records import ServiceArgumentError
 from tin_lite.integrations import (
+    POSTHOG_PROVIDER,
+    STRIPE_PROVIDER,
     IntegrationError,
     IntegrationRequirement,
+    ServiceCallRefused,
     ServiceResponseTooLarge,
 )
 from tin_lite.project_connections import CUSTOM_KEY, READ_METHODS, request_api, request_contract
@@ -36,6 +41,22 @@ OPERATIONS = {
         "calendar.events.read",
         frozenset({"time_min", "time_max", "query", "max_results"}),
     ),
+    # Stripe's reviewed read table: operation name -> (capability, closed argument names).
+    **{
+        (STRIPE_PROVIDER, name): (op.capability, op.arguments)
+        for name, op in stripe_connection.OPERATIONS.items()
+    },
+    # PostHog's reviewed reads; the selected project is Tin's, never an argument.
+    **{
+        (POSTHOG_PROVIDER, name): (op.capability, op.arguments)
+        for name, op in posthog_connection.OPERATIONS.items()
+    },
+}
+# Providers whose argument values are checked before a receipt exists, so a malformed call is
+# a contract error the author can fix rather than an uncertain provider attempt.
+ARGUMENT_CHECKS = {
+    STRIPE_PROVIDER: stripe_connection.check_arguments,
+    POSTHOG_PROVIDER: posthog_connection.check_arguments,
 }
 
 
@@ -83,11 +104,18 @@ class CodeServices:
                 capability, fields = OPERATIONS[(service.provider_key, payload["operation"])]
                 if not isinstance(args, dict) or set(args) - fields:
                     raise ValueError
+                check = ARGUMENT_CHECKS.get(service.provider_key)
+                if check is not None:
+                    check(payload["operation"], args)
             if (
                 capability not in service.capabilities
                 or len(json.dumps(args, allow_nan=False).encode()) > 16_000
             ):
                 raise ValueError
+        except ServiceArgumentError as exc:
+            raise CodeServiceError(
+                f"The service request differs from its declared contract: {exc}."
+            ) from None
         except (ValueError, TypeError, KeyError, StopIteration, RecursionError):
             raise CodeServiceError(
                 "The service request differs from its declared contract."
@@ -151,6 +179,8 @@ class CodeServices:
                 if saved.status == "completed":
                     if record.get("error") == "response_too_large":
                         raise _too_large(service)
+                    if record.get("error"):
+                        raise CodeServiceError(record.get("message") or "The provider refused it.")
                     return record["response"]
                 raise CodeServiceError(
                     "A service request has an unconfirmed result; "
@@ -250,6 +280,18 @@ class CodeServices:
                         result={**usage, "outcome": "response_received", "usage": {"requests": 1}},
                     )
                 raise _too_large(service) from None
+            except ServiceCallRefused as exc:
+                # The provider answered and refused (rate limit, missing permission, revoked
+                # key): settle the step with Tin's own message so a new step may try again.
+                refused = {**record, "error": exc.code, "message": str(exc)[:500]}
+                async with conn.transaction():
+                    await self.db.complete_effect(conn, execution_key=key, result=refused)
+                    await self.db.complete_effect(
+                        conn,
+                        execution_key=usage_key,
+                        result={**usage, "outcome": "response_received", "usage": {"requests": 1}},
+                    )
+                raise CodeServiceError(refused["message"]) from None
             except (
                 IntegrationError,
                 httpx.HTTPError,
@@ -307,6 +349,16 @@ class CodeServices:
 
     async def adapter(self, provider, operation, args, run, connection, key, *, max_response_bytes):
         service = self.integrations
+        if provider in {STRIPE_PROVIDER, POSTHOG_PROVIDER}:
+            adapter = service.stripe if provider == STRIPE_PROVIDER else service.posthog
+            return await adapter.call(
+                operation,
+                args,
+                connection=connection,
+                run_id=run.id,
+                execution_key=key,
+                max_response_bytes=max_response_bytes,
+            )
         if operation == "sites.list":
             return {
                 "sites": [asdict(x) for x in await service.google_sites(project_id=run.project_id)]

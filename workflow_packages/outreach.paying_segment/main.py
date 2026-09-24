@@ -16,10 +16,11 @@ OUTPUT = "reports/outreach/PAYING_SEGMENT.md"
 SERVICE = "stripe"
 MAX_CALLS = 8
 MAX_RESPONSE_BYTES = 64_000
-# Stripe pretty-prints its JSON and the gateway counts raw bytes. One subscription with its
-# customer expanded is about 6-8 KB, so each page is sized from the largest record seen so far.
-HEADROOM = 0.75
-PROBE_LIMIT = 3
+# Stripe's page size. Tin keeps the leading records that fit MAX_RESPONSE_BYTES and says where
+# to continue, so the package never sizes pages itself.
+PAGE_LIMIT = 100
+# How Tin's own refusals start: a Stripe answer (permission, key, rate limit) or an uncertain read.
+REFUSALS = ("Stripe", "Service response unavailable")
 DAY = 86_400
 ALPHA = 0.05
 MIN_JUDGED = 20
@@ -129,76 +130,56 @@ def validate(inputs):
 
 
 async def fetch(ctx, now, settings):
-    """Read the newest judgeable subscriptions, sizing each page to fit the response bound."""
-    base = {
+    """Read the newest judgeable subscriptions, page by page, through Tin's Stripe reads.
+
+    Tin expands each customer and returns small projected records, fitting as many as the
+    binding's byte bound allows; `next_cursor` continues exactly after the last one returned.
+    """
+    window = {
         "status": "all",
-        "expand[0]": "data.customer",
-        "created[gte]": int((now - timedelta(days=settings["lookback_days"])).timestamp()),
-        # Younger subscriptions cannot show whether a customer stayed; do not spend bytes on them.
-        "created[lte]": int((now - timedelta(days=settings["retention_days"])).timestamp()),
+        "created_gte": int((now - timedelta(days=settings["lookback_days"])).timestamp()),
+        # Younger subscriptions cannot show whether a customer stayed; do not spend reads on them.
+        "created_lte": int((now - timedelta(days=settings["retention_days"])).timestamp()),
+        "limit": PAGE_LIMIT,
     }
-    records, requests, cursor, largest, limit = [], [], None, 0, PROBE_LIMIT
+    records, requests, cursor = [], [], None
     for index in range(MAX_CALLS):
-        params = {**base, "limit": limit}
-        if cursor is not None:
-            params["starting_after"] = cursor
-        step = "probe" if index == 0 else f"page_{index + 1}"
-        response = await ctx.services.request(
-            service=SERVICE, step=step, path="/v1/subscriptions", method="GET", params=params
-        )
-        page = stripe_list(response)
-        sizes = [raw_size(item) for item in page["data"]]
-        largest = max([largest, *sizes])
+        arguments = window if cursor is None else {**window, "cursor": cursor}
+        step = f"page_{index + 1}"
+        try:
+            response = await ctx.services.call(
+                service=SERVICE, step=step, operation="subscriptions.list", arguments=arguments
+            )
+        except ValueError as error:
+            # Tin's own refusals (missing permission, revoked key, rate limit, an uncertain
+            # read) need the founder; anything else is a bug in this package and must fail.
+            if str(error).startswith(REFUSALS):
+                raise ConnectionProblem(str(error)) from None
+            raise
+        page = subscription_page(response)
         requests.append(
-            {
-                "step": step,
-                "limit": limit,
-                "records": len(page["data"]),
-                "largest_record_bytes": max(sizes, default=0),
-            }
+            {"step": step, "records": len(page["records"]), "fitted": page["truncated"]}
         )
-        records.extend(page["data"])
-        if not page["has_more"] or not page["data"]:
+        records.extend(page["records"])
+        if not page["has_more"]:
             return records, requests, False
-        cursor = page["data"][-1].get("id")
-        if not isinstance(cursor, str):
-            raise ValueError("Invalid Stripe subscription record")
-        limit = max(1, min(100, int(MAX_RESPONSE_BYTES * HEADROOM) // max(largest, 1)))
+        cursor = page["next_cursor"]
     return records, requests, True
 
 
-def raw_size(item):
-    """Bytes a record takes in Stripe's two-space JSON, nested two levels inside the list."""
-    text = json.dumps(item, indent=2, ensure_ascii=False)
-    return len(text.encode()) + 4 * (text.count("\n") + 1)
-
-
-def stripe_list(response):
-    if not isinstance(response, dict) or type(response.get("status")) is not int:
-        raise ValueError("The Stripe connection returned an invalid envelope")
-    status = response["status"]
-    if status in (401, 403):
-        raise ConnectionProblem(
-            f"Stripe refused the key (HTTP {status}). Use a restricted key with Read access to "
-            "Subscriptions and Customers."
-        )
-    if status == 404:
-        raise ConnectionProblem(
-            "Stripe returned HTTP 404. The connection origin must be https://api.stripe.com."
-        )
-    if status == 429:
-        raise ConnectionProblem("Stripe rate-limited the read (HTTP 429). Run it again later.")
-    if status != 200:
-        raise ConnectionProblem(f"Stripe returned HTTP {status}; no subscriptions were read.")
-    data = response.get("data")
+def subscription_page(response):
     if (
-        not isinstance(data, dict)
-        or data.get("object") != "list"
-        or not isinstance(data.get("data"), list)
-        or type(data.get("has_more")) is not bool
+        not isinstance(response, dict)
+        or not isinstance(response.get("records"), list)
+        or type(response.get("has_more")) is not bool
+        or type(response.get("truncated")) is not bool
     ):
-        raise ValueError("Stripe did not return a subscription list")
-    return data
+        raise ValueError("Stripe did not return a subscription page")
+    if response["has_more"] and (
+        not response["records"] or not isinstance(response.get("next_cursor"), str)
+    ):
+        raise ValueError("Stripe returned a page without a cursor to continue from")
+    return response
 
 
 def timestamp(value, *, required=False):
@@ -210,31 +191,25 @@ def timestamp(value, *, required=False):
 
 
 def normalize(sub):
+    """One projected subscription (see docs/stripe-and-posthog-connections.md) to a record."""
     if (
         not isinstance(sub, dict)
-        or sub.get("object") != "subscription"
         or not isinstance(sub.get("id"), str)
         or not isinstance(sub.get("status"), str)
+        or not isinstance(sub.get("customer"), dict)
+        or not isinstance(sub["customer"].get("id"), str)
+        or not isinstance(sub.get("items"), list)
     ):
         raise ValueError("Invalid Stripe subscription record")
-    customer = sub.get("customer")
-    if isinstance(customer, str):
-        customer = {"id": customer}
-    if not isinstance(customer, dict) or not isinstance(customer.get("id"), str):
-        raise ValueError("Invalid Stripe subscription record")
+    customer = sub["customer"]
     start = timestamp(sub.get("start_date") or sub.get("created"), required=True)
     trial_end = timestamp(sub.get("trial_end"))
     ended = timestamp(sub.get("ended_at"))
-    items = sub.get("items")
-    if not isinstance(items, dict) or not isinstance(items.get("data"), list):
-        raise ValueError("Invalid Stripe subscription record")
-    email = None if customer.get("deleted") else customer.get("email")
-    domain, email_type = classify_email(email)
-    address = customer.get("address") if isinstance(customer.get("address"), dict) else {}
-    country = address.get("country") if isinstance(address.get("country"), str) else None
+    domain, email_type = classify_email(None if customer.get("deleted") else customer)
+    country = customer.get("country")
     details = sub.get("cancellation_details")
     details = details if isinstance(details, dict) else {}
-    monthly, currency, label, interval = price(items["data"], sub.get("currency"))
+    monthly, currency, label, interval = price(sub["items"])
     return {
         "id": sub["id"],
         "customer": customer["id"],
@@ -245,9 +220,8 @@ def normalize(sub):
         "ended": ended,
         "domain": domain,
         "email_type": email_type,
-        "country": country.upper() if country and len(country) == 2 else None,
-        # API versions differ: older ones carry `discount`, newer ones a `discounts` list.
-        "discounted": bool(sub.get("discounts")) or bool(sub.get("discount")),
+        "country": country.upper() if isinstance(country, str) and len(country) == 2 else None,
+        "discounted": bool(sub.get("discount_ids")) or bool(sub.get("coupon_id")),
         "monthly": monthly,
         "currency": currency,
         "price": label,
@@ -262,12 +236,12 @@ def normalize(sub):
     }
 
 
-def classify_email(email):
-    if not isinstance(email, str) or email.count("@") != 1:
+def classify_email(customer):
+    """Email type from the projected customer's email domain; the address itself is not kept."""
+    domain = customer.get("email_domain") if isinstance(customer, dict) else None
+    if not isinstance(domain, str) or not DOMAIN.fullmatch(domain.lower()):
         return None, "no email"
-    domain = email.rsplit("@", 1)[1].strip().lower()
-    if not DOMAIN.fullmatch(domain):
-        return None, "no email"
+    domain = domain.lower()
     if domain in FREE_MAIL:
         return domain, "personal email"
     if EDUCATION.search(domain):
@@ -275,21 +249,18 @@ def classify_email(email):
     return domain, "work email"
 
 
-def price(items, fallback_currency):
+def price(items):
     """List-price monthly value in minor units; None when a price is tiered or metered."""
     total, currency, labels, intervals = 0, None, [], set()
     for item in items:
-        if not isinstance(item, dict) or not isinstance(
-            item.get("price") or item.get("plan"), dict
-        ):
+        if not isinstance(item, dict) or not isinstance(item.get("price_id"), str):
             raise ValueError("Invalid Stripe subscription record")
-        entry = item.get("price") or item.get("plan")
-        recurring = entry.get("recurring") if isinstance(entry.get("recurring"), dict) else entry
-        interval = recurring.get("interval")
-        count = recurring.get("interval_count") or 1
-        amount = entry.get("unit_amount", entry.get("amount"))
-        quantity = item.get("quantity", 1)
-        currency = entry.get("currency") if isinstance(entry.get("currency"), str) else currency
+        interval = item.get("interval")
+        count = item.get("interval_count") or 1
+        amount = item.get("unit_amount")
+        quantity = item.get("quantity")
+        quantity = 1 if quantity is None else quantity
+        currency = item.get("currency") if isinstance(item.get("currency"), str) else currency
         if (
             interval not in INTERVAL_MONTHS
             or type(count) is not int
@@ -302,18 +273,12 @@ def price(items, fallback_currency):
         else:
             total += amount * quantity / (INTERVAL_MONTHS[interval] * count)
         intervals.add(interval if interval in INTERVAL_MONTHS else "other")
-        nickname = entry.get("nickname")
-        if (
-            isinstance(nickname, str)
-            and SAFE_LABEL.fullmatch(nickname)
-            and not IDENTIFIER.search(nickname)
-        ):
-            labels.append(nickname)
-        elif type(amount) is int and interval in INTERVAL_MONTHS:
-            labels.append(f"{(currency or '').upper()} {amount / 100:,.2f}/{interval}".strip())
+        if type(amount) is int and interval in INTERVAL_MONTHS:
+            every = interval if count == 1 else f"{count} {interval}s"
+            labels.append(f"{(currency or '').upper()} {amount / 100:,.2f}/{every}".strip())
         else:
             labels.append("usage-based price")
-    currency = (currency or fallback_currency or "").lower() or None
+    currency = (currency or "").lower() or None
     if not items:
         return None, currency, "no price", "other"
     interval = intervals.pop() if len(intervals) == 1 else "mixed"
@@ -1053,9 +1018,11 @@ def diagnostic(now, settings, problem):
             "",
             problem,
             "",
-            "Set up custom.api.stripe in Integrations: origin https://api.stripe.com, method GET, "
-            "bearer authentication, and a Stripe restricted key with Read on Subscriptions and "
-            "Customers and nothing else. No figures were computed from this run.",
+            "Connect Stripe in Integrations with a restricted key (rk_live_ or rk_test_) made "
+            "from Tin's link, which selects read permissions only. This workflow needs a "
+            "restricted key with Read access to Subscriptions and Customers. After changing the "
+            "key in Stripe, press Check again on the Stripe card. No figures were computed from "
+            "this run.",
             "",
         ]
     )

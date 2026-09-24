@@ -50,13 +50,17 @@ from tin_lite.integrations import (
     GITHUB_PROVIDER,
     GOOGLE_WORKSPACE_PROVIDER,
     GSC_PROVIDER,
+    POSTHOG_PROVIDER,
+    STRIPE_PROVIDER,
     GitHubInstallationChoiceError,
     GitHubInstallationRequiredError,
     IntegrationAuthorizationError,
     IntegrationDefinition,
     IntegrationError,
+    IntegrationInputError,
     IntegrationNotConfiguredError,
     IntegrationUpstreamError,
+    ServiceCallRefused,
     registered_integrations,
 )
 from tin_lite.keyword_plan_control import stop_keyword_plan as stop_keyword_plan_service
@@ -1157,6 +1161,7 @@ class IntegrationView(BaseModel):
     access_label: str
     capabilities: list[str]
     unlocks: list[str]
+    setup_url: str | None = None
     configured: bool
     connection_id: UUID | None = None
     project_id: UUID | None = None
@@ -1255,8 +1260,24 @@ async def authentication_ui(request: Request) -> HTMLResponse:
 
 @router.get("/integrations/callback/google", response_class=HTMLResponse, include_in_schema=False)
 @router.get("/integrations/callback/github", response_class=HTMLResponse, include_in_schema=False)
+@router.get("/integrations/callback/posthog", response_class=HTMLResponse, include_in_schema=False)
 async def integration_callback_ui(request: Request) -> HTMLResponse:
     return _static_page("index.html", request)
+
+
+@router.get("/integrations/posthog/client.json", include_in_schema=False)
+async def posthog_client_metadata(request: Request) -> JSONResponse:
+    """Tin's OAuth client identity for PostHog: its URL is the client_id PostHog fetches."""
+    from tin_lite.posthog_connection import client_metadata
+
+    runtime = request.app.state.runtime
+    if not runtime.integrations.is_configured(POSTHOG_PROVIDER):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    # PostHog caches the document for max-age (clamped to 5 minutes..24 hours).
+    return JSONResponse(
+        client_metadata(request.app.state.settings),
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 @router.post("/webhooks/github", include_in_schema=False)
@@ -1582,6 +1603,30 @@ async def complete_google_integration(
 
 
 @router.post(
+    "/api/integrations/posthog/complete",
+    response_model=IntegrationView,
+)
+async def complete_posthog_integration(
+    payload: GoogleIntegrationComplete,
+    request: Request,
+    user: AuthContext = AUTHENTICATED_USER,
+) -> IntegrationView:
+    """Finish PostHog OAuth; a repeated callback returns the connection it already made."""
+    service = request.app.state.runtime.integrations
+    try:
+        project_id = await service.posthog.pending_project(
+            state=payload.state, clerk_user_id=user.clerk_user_id
+        )
+        await _require_project_access(project_id, request, user)
+        connection = await service.posthog.complete(
+            state=payload.state, code=payload.code, clerk_user_id=user.clerk_user_id
+        )
+    except IntegrationError as exc:
+        raise _integration_http_error(exc) from None
+    return _integration_view(service._definition(POSTHOG_PROVIDER), connection, configured=True)
+
+
+@router.post(
     "/api/integrations/github/authorize",
     response_model=IntegrationConnectView,
 )
@@ -1691,6 +1736,8 @@ async def list_integration_options(
             options = await service.google_sites(project_id=project_id)
         elif provider_key == GITHUB_PROVIDER:
             options = await service.github_repositories(project_id=project_id)
+        elif provider_key == POSTHOG_PROVIDER:
+            options = await service.posthog.projects(project_id=project_id)
         elif provider_key == GOOGLE_WORKSPACE_PROVIDER:
             raise IntegrationAuthorizationError(
                 "Google Workspace connects an account and has no selectable property"
@@ -1698,6 +1745,10 @@ async def list_integration_options(
         elif provider_key == ADS_PROVIDER:
             raise IntegrationAuthorizationError(
                 "Google Ads links one account by customer id and has no selectable property"
+            )
+        elif provider_key == STRIPE_PROVIDER:
+            raise IntegrationAuthorizationError(
+                "Stripe connects one account by restricted key and has no selectable property"
             )
         else:
             raise IntegrationAuthorizationError("unknown integration provider")
@@ -1749,6 +1800,64 @@ async def refresh_google_ads_account(
         raise _integration_http_error(exc) from exc
     definition = next(item for item in registered_integrations() if item.key == ADS_PROVIDER)
     return _integration_view(definition, connection, configured=True)
+
+
+@router.post(
+    "/api/projects/{project_id}/integrations/payments.stripe/key",
+    response_model=IntegrationView,
+)
+async def save_stripe_key(
+    project_id: UUID,
+    request: Request,
+    user: AuthContext = AUTHENTICATED_USER,
+) -> IntegrationView:
+    """Validate and store a pasted Stripe restricted key; replacing one names its revision."""
+    await _require_project_access(project_id, request, user)
+    # Parsed by hand: FastAPI's validation details would echo a malformed key back.
+    try:
+        payload = await request.json()
+        if not isinstance(payload, dict) or set(payload) - {"restricted_key", "expected_revision"}:
+            raise ValueError
+        key, revision = payload.get("restricted_key"), payload.get("expected_revision")
+        if not isinstance(key, str) or not 1 <= len(key) <= 300:
+            raise ValueError
+        if revision is not None and (not isinstance(revision, str) or len(revision) > 64):
+            raise ValueError
+    except (ValueError, UnicodeError, RecursionError):
+        raise HTTPException(
+            status_code=422,
+            detail="Send restricted_key and expected_revision; nothing was saved.",
+        ) from None
+    service = request.app.state.runtime.integrations
+    try:
+        connection = await service.stripe.connect(
+            project_id=project_id,
+            clerk_user_id=user.clerk_user_id,
+            restricted_key=key,
+            expected_revision=revision,
+        )
+    except IntegrationError as exc:
+        raise _integration_http_error(exc) from None
+    return _integration_view(service._definition(STRIPE_PROVIDER), connection, configured=True)
+
+
+@router.post(
+    "/api/projects/{project_id}/integrations/payments.stripe/refresh",
+    response_model=IntegrationView,
+)
+async def refresh_stripe_key(
+    project_id: UUID,
+    request: Request,
+    user: AuthContext = AUTHENTICATED_USER,
+) -> IntegrationView:
+    """Re-check which reads the stored key allows, after it was edited in Stripe."""
+    await _require_project_access(project_id, request, user)
+    service = request.app.state.runtime.integrations
+    try:
+        connection = await service.stripe.refresh(project_id=project_id)
+    except IntegrationError as exc:
+        raise _integration_http_error(exc) from exc
+    return _integration_view(service._definition(STRIPE_PROVIDER), connection, configured=True)
 
 
 @router.put(
@@ -3950,6 +4059,7 @@ def _integration_view(
         access_label=definition.access_label,
         capabilities=list(definition.capabilities),
         unlocks=list(definition.unlocks),
+        setup_url=getattr(definition, "setup_url", None),
         configured=configured,
         connection_id=getattr(connection, "id", None),
         project_id=getattr(connection, "project_id", None),
@@ -3968,6 +4078,12 @@ def _integration_http_error(exc: IntegrationError) -> HTTPException:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         )
+    if isinstance(exc, IntegrationInputError):
+        return HTTPException(status_code=422, detail=str(exc))
+    if isinstance(exc, ServiceCallRefused):
+        # The provider answered and refused; the message is Tin's own.
+        code = 429 if exc.code == "rate_limited" else status.HTTP_409_CONFLICT
+        return HTTPException(status_code=code, detail=str(exc))
     if isinstance(exc, IntegrationAuthorizationError):
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     if isinstance(exc, IntegrationUpstreamError):

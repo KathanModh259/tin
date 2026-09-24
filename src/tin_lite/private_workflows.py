@@ -688,6 +688,14 @@ def authoring_guide(*, settings, project_id):
                     "pull_requests.write",
                 ],
                 "workspace.google": ["gmail.messages.read", "calendar.events.read"],
+                "payments.stripe": [
+                    "subscriptions.read",
+                    "customers.read",
+                    "invoices.read",
+                    "prices.read",
+                    "charges.read",
+                ],
+                "analytics.posthog": ["query.read", "definitions.read", "insights.read"],
             },
             "prerequisites": {
                 "levels": ["required", "recommended"],
@@ -788,10 +796,21 @@ def authoring_guide(*, settings, project_id):
                 "gmail.thread.read/calendar.events.list. Existing connections are reused. "
                 "GSC search_analytics.read accepts start_row and dimension_filters and returns "
                 "the leading rows that fit max_response_bytes, adding truncated and "
-                "next_start_row when more may exist.",
+                "next_start_row when more may exist. Stripe (payments.stripe) "
+                "subscriptions.list/customers.list/invoices.list/prices.list/charges.list "
+                "return projected {records, has_more, truncated, next_cursor}; pass "
+                "next_cursor as cursor in a new step to continue. PostHog (analytics.posthog) "
+                "reads the founder's selected project: event_definitions.list/"
+                "property_definitions.list/insights.list page the same way, and query.hogql "
+                "takes {query, name} where query is one SELECT ending in LIMIT <= 1000 with "
+                "no OFFSET (page with a WHERE on timestamp) and returns {columns, types, rows, "
+                "has_more, truncated}. Stripe customer records include full email and name. "
+                "Arguments, fields and errors: docs/stripe-and-posthog-connections.md in "
+                "Tin's source.",
                 "recovery": "Stable steps replay completed bounded responses. Changed "
                 "requests/connections and uncertain attempts fail closed. Credential rotation "
-                "retains the binding. An oversized response is a named error for that step "
+                "retains the binding. An oversized response, or a provider refusal such as a "
+                "rate limit or missing permission, is a named error for that step "
                 "and does not block later steps. Provider costs remain separate from Tin model "
                 "credits.",
             },

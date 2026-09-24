@@ -4,7 +4,7 @@
     "key": "outreach.paying_segment",
     "title": "Find who pays and stays",
     "description": "A founder with Stripe subscriptions learns which customers keep paying, and gets exact inputs for the outreach shortlist, keyword plan and ads assessment to aim at them. Read-only; no model calls, and it starts nothing itself.",
-    "version": "1.1.0",
+    "version": "2.0.0",
     "executor": "workflow.code",
     "system": "cold-outreach",
     "schedule_modes": [
@@ -92,9 +92,9 @@
     ],
     "integration_requirements": [
       {
-        "provider_key": "custom.api.stripe",
+        "provider_key": "payments.stripe",
         "capabilities": [
-          "http.read"
+          "subscriptions.read"
         ],
         "required": true
       }
@@ -108,7 +108,7 @@
       "timeout_seconds": 60,
       "services": {
         "stripe": {
-          "provider_key": "custom.api.stripe",
+          "provider_key": "payments.stripe",
           "max_calls": 8,
           "max_response_bytes": 64000
         }

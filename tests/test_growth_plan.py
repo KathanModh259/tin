@@ -331,7 +331,7 @@ async def test_plan_says_what_arrives_first_and_never_promises_publication():
     # A blank repository field does not hide GitHub; it is conditional on confirming the repository.
     connections = text.split("## Connections\n", 1)[1].split("```tin-plan", 1)[0]
     assert "analytics.gsc" in connections and "actual queries and impressions" in connections
-    assert "product analytics" in connections and "does not connect" in connections
+    assert "product analytics" in connections and "reads PostHog directly" in connections
     # The mailbox is requested only when the selected work needs it.
     needed = {i for item in block_of(text) for i in item["integrations"]}
     assert ("workspace.google" in connections) == ("workspace.google" in needed)
@@ -549,6 +549,12 @@ def test_definition_pins_the_contract_and_the_assets_stay_consistent():
         assert set(row["tin"]["integrations"]) <= providers, row["id"]
     system_fields = {entry["input"] for entry in plan.PROGRAMS["systems_checklist"]}
     assert len(system_fields) == 11 and system_fields <= set(properties)
+    # A checklist system that names a Tin integration names a registered, labelled one.
+    from tin_lite.integrations import registered_integrations
+
+    named = {e["tin_integration"] for e in plan.PROGRAMS["systems_checklist"]} - {None}
+    assert named <= {d.key for d in registered_integrations()} and named <= set(plan.PROVIDERS)
+    assert {"payments.stripe", "analytics.posthog"} <= named
     titles = plan.PROGRAMS["workflow_titles"]
     public = {
         item.key: json.loads((ROOT / "workflow_packages" / item.key / "workflow.json").read_text())[

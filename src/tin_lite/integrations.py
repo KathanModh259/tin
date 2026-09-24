@@ -51,7 +51,28 @@ GSC_PROVIDER = "analytics.gsc"
 GITHUB_PROVIDER = "infra.github"
 GOOGLE_WORKSPACE_PROVIDER = "workspace.google"
 ADS_PROVIDER = "ads.google"
-PROVIDER_KEYS = frozenset({GSC_PROVIDER, GITHUB_PROVIDER, GOOGLE_WORKSPACE_PROVIDER, ADS_PROVIDER})
+STRIPE_PROVIDER = "payments.stripe"
+POSTHOG_PROVIDER = "analytics.posthog"
+PROVIDER_KEYS = frozenset(
+    {
+        GSC_PROVIDER,
+        GITHUB_PROVIDER,
+        GOOGLE_WORKSPACE_PROVIDER,
+        ADS_PROVIDER,
+        STRIPE_PROVIDER,
+        POSTHOG_PROVIDER,
+    }
+)
+# Read-only Stripe capabilities; each names the Stripe resources its operation reads.
+STRIPE_CAPABILITIES = (
+    "subscriptions.read",
+    "customers.read",
+    "invoices.read",
+    "prices.read",
+    "charges.read",
+)
+# Read-only PostHog capabilities for the one project the founder selects.
+POSTHOG_CAPABILITIES = ("query.read", "definitions.read", "insights.read")
 ADS_CAPABILITIES = ("account.read", "campaigns.read", "campaigns.write")
 # Google's ManagerLinkStatus values, lower-cased for the connection's configuration.
 ADS_LINK_STATES = {
@@ -132,8 +153,34 @@ class IntegrationUpstreamError(IntegrationError):
     pass
 
 
+class IntegrationInputError(IntegrationError):
+    """The person's own input was rejected before anything was stored."""
+
+
 class ServiceResponseTooLarge(IntegrationError):
     """A received response exceeded its declared byte bound; the outcome is known, not uncertain."""
+
+
+class ServiceCallRefused(IntegrationError):
+    """The provider answered and refused one read: a known outcome with a Tin-authored message.
+
+    The service gateway settles the step with `code` instead of treating it as uncertain, so a
+    later step may try again. Messages never carry provider bodies or credentials.
+    """
+
+    def __init__(self, message: str, *, code: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class IntegrationRateLimitedError(ServiceCallRefused):
+    """The provider rate-limited a read; retry it later under a new step."""
+
+    def __init__(
+        self, message: str, *, reason: str | None = None, retry_after: int | None = None
+    ) -> None:
+        super().__init__(message, code="rate_limited")
+        self.reason, self.retry_after = reason, retry_after
 
 
 class GitHubInstallationRequiredError(IntegrationAuthorizationError):
@@ -173,6 +220,8 @@ class IntegrationDefinition:
     access_label: str
     capabilities: tuple[str, ...]
     unlocks: tuple[str, ...]
+    # Where the founder creates the credential to paste, for key-entry providers.
+    setup_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -315,7 +364,38 @@ def registered_integrations() -> tuple[IntegrationDefinition, ...]:
             capabilities=ADS_CAPABILITIES,
             unlocks=("Google Ads launch", "Google Ads monitor"),
         ),
+        IntegrationDefinition(
+            key=STRIPE_PROVIDER,
+            name="Stripe",
+            badge="ST",
+            description=(
+                "Read subscriptions, customers, invoices, prices and charges through a "
+                "restricted key you create in Stripe with read permissions only."
+            ),
+            access_label="Read only · restricted key",
+            capabilities=STRIPE_CAPABILITIES,
+            unlocks=("Revenue and churn evidence", "Paying-customer research"),
+            setup_url=_stripe_create_key_url(),
+        ),
+        IntegrationDefinition(
+            key=POSTHOG_PROVIDER,
+            name="PostHog",
+            badge="PH",
+            description=(
+                "Run bounded HogQL reads and list event, property and insight definitions "
+                "in one PostHog project you choose."
+            ),
+            access_label="Read only · one project",
+            capabilities=POSTHOG_CAPABILITIES,
+            unlocks=("Activation and funnel evidence", "Product analytics brief"),
+        ),
     )
+
+
+def _stripe_create_key_url() -> str:
+    from tin_lite.stripe_connection import create_key_url
+
+    return create_key_url()
 
 
 def parse_integration_requirements(value: Any) -> tuple[IntegrationRequirement, ...]:
@@ -475,7 +555,7 @@ class IntegrationService:
 
     def is_configured(self, provider_key: str) -> bool:
         self._definition(provider_key)
-        if provider_key.startswith("custom.api."):
+        if provider_key.startswith("custom.api.") or provider_key == STRIPE_PROVIDER:
             return self._cipher is not None
         if provider_key in {GSC_PROVIDER, GOOGLE_WORKSPACE_PROVIDER}:
             return bool(
@@ -483,6 +563,10 @@ class IntegrationService:
                 and self._settings.google_oauth_client_id
                 and self._settings.google_oauth_client_secret
             )
+        if provider_key == POSTHOG_PROVIDER:
+            from tin_lite.posthog_connection import oauth_ready
+
+            return self._cipher is not None and oauth_ready(self._settings)
         if provider_key == ADS_PROVIDER:
             from tin_lite.google_ads import manager_oauth_client
 
@@ -511,6 +595,18 @@ class IntegrationService:
         from tin_lite.project_connections import ProjectConnections
 
         return ProjectConnections(self)
+
+    @property
+    def stripe(self):
+        from tin_lite.stripe_connection import StripeConnections
+
+        return StripeConnections(self)
+
+    @property
+    def posthog(self):
+        from tin_lite.posthog_connection import PostHogConnections
+
+        return PostHogConnections(self)
 
     def definitions(self, connections):
         from tin_lite.project_connections import CUSTOM_KEY, custom_definition
@@ -571,6 +667,28 @@ class IntegrationService:
                         "Google Workspace needs additional permission before starting this workflow"
                     )
                 continue
+            if requirement.provider_key == STRIPE_PROVIDER:
+                missing = set(requirement.capabilities) - _granted(connection)
+                if connection.credential_ciphertext is None or missing:
+                    raise IntegrationAuthorizationError(
+                        "Stripe's restricted key does not allow "
+                        + ", ".join(sorted(missing) or ["these reads"])
+                        + "; add the read permission in Stripe, then press Check again"
+                    )
+                continue
+            if requirement.provider_key == POSTHOG_PROVIDER:
+                if not _selected_string(connection, "selected_project_id"):
+                    raise IntegrationAuthorizationError(
+                        "Choose a PostHog project before starting this workflow"
+                    )
+                missing = set(requirement.capabilities) - _granted(connection)
+                if connection.credential_ciphertext is None or missing:
+                    raise IntegrationAuthorizationError(
+                        "PostHog did not grant "
+                        + ", ".join(sorted(missing) or ["these reads"])
+                        + "; reconnect PostHog and approve the read access"
+                    )
+                continue
             if requirement.provider_key == ADS_PROVIDER:
                 link = connection.configuration.get("link_status")
                 if link != "active":
@@ -626,6 +744,16 @@ class IntegrationService:
             raise IntegrationError("Use the secure Custom API form in project Integrations.")
         self._require_configured(provider_key)
         definition = self._definition(provider_key)
+        if provider_key == STRIPE_PROVIDER:
+            # A restricted key is pasted only in Tin's own page, never through chat or MCP.
+            from tin_lite.product_urls import dashboard_url
+
+            return ConnectStart(
+                authorization_url=(
+                    f"{dashboard_url(self._settings)}/connect?project={project_id}"
+                    f"&providers={STRIPE_PROVIDER}"
+                )
+            )
         if capabilities is None:
             requested_capabilities = (
                 WORKSPACE_DEFAULT_CAPABILITIES
@@ -655,10 +783,11 @@ class IntegrationService:
                             ]
                         )
                     )
+        pkce = {GSC_PROVIDER, GOOGLE_WORKSPACE_PROVIDER, POSTHOG_PROVIDER}
         state = secrets.token_urlsafe(32)
         state_hash = _sha256(state)
         verifier_ciphertext = None
-        if provider_key in {GSC_PROVIDER, GOOGLE_WORKSPACE_PROVIDER}:
+        if provider_key in pkce:
             verifier = secrets.token_urlsafe(64)
             assert self._cipher is not None
             verifier_ciphertext = self._cipher.encrypt(
@@ -673,12 +802,21 @@ class IntegrationService:
             requested_capabilities=requested_capabilities,
             expires_at=datetime.now(UTC) + timedelta(minutes=10),
         )
-        if provider_key in {GSC_PROVIDER, GOOGLE_WORKSPACE_PROVIDER}:
+        if provider_key in pkce:
             challenge = (
                 base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
                 .rstrip(b"=")
                 .decode()
             )
+        if provider_key == POSTHOG_PROVIDER:
+            from tin_lite.posthog_connection import authorization_url
+
+            return ConnectStart(
+                authorization_url=authorization_url(
+                    self._settings, state=state, challenge=challenge
+                )
+            )
+        if provider_key in {GSC_PROVIDER, GOOGLE_WORKSPACE_PROVIDER}:
             query = urlencode(
                 {
                     "client_id": self._settings.google_oauth_client_id,
@@ -3144,6 +3282,8 @@ class IntegrationService:
     async def select_option(
         self, *, project_id: UUID, provider_key: str, option_id: str
     ) -> IntegrationConnection:
+        if provider_key == POSTHOG_PROVIDER:
+            return await self.posthog.select_project(project_id=project_id, option_id=option_id)
         if provider_key == GSC_PROVIDER:
             options = await self.google_sites(project_id=project_id)
             config_key = "selected_site_url"
@@ -3182,6 +3322,13 @@ class IntegrationService:
             )
             if connection is not None:
                 await self._cancel_google_ads_link(connection)
+        if provider_key == POSTHOG_PROVIDER:
+            connection = await self._database.get_integration_connection(
+                project_id=project_id, provider_key=provider_key
+            )
+            if connection is not None:
+                # Best effort, like Google: local disconnection is authoritative.
+                await self.posthog.revoke(connection)
         if provider_key in {GSC_PROVIDER, GOOGLE_WORKSPACE_PROVIDER}:
             connection = await self._database.get_integration_connection(
                 project_id=project_id, provider_key=provider_key
@@ -4281,6 +4428,13 @@ def _installation_id(connection: IntegrationConnection) -> int:
         return int(connection.external_account_id or "")
     except ValueError as exc:
         raise IntegrationAuthorizationError("GitHub installation is invalid") from exc
+
+
+def _granted(connection: IntegrationConnection) -> set[str]:
+    granted = connection.configuration.get("granted_capabilities", [])
+    return (
+        {item for item in granted if isinstance(item, str)} if isinstance(granted, list) else set()
+    )
 
 
 def _selected_string(connection: IntegrationConnection, key: str) -> str | None:

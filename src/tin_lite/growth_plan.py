@@ -57,8 +57,8 @@ PROVIDERS = {
     "analytics.gsc": "Google Search Console",
     "workspace.google": "Google Workspace",
     "ads.google": "Google Ads",
-    "custom.api.stripe": "a Stripe API connection",
-    "custom.api.posthog": "a PostHog API connection",
+    "payments.stripe": "Stripe",
+    "analytics.posthog": "PostHog",
 }
 WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
@@ -1084,6 +1084,9 @@ def render(
         "workspace.google": "signup and product checks with a test account"
         if no_outreach
         else "outreach sends from your mailbox",
+        "payments.stripe": "read-only subscriptions and customers show who pays and who stays",
+        "analytics.posthog": "read-only events and insights from one PostHog project show "
+        "where signups activate or drop",
     }
     if has or live_site:
         out += [
@@ -1096,7 +1099,8 @@ def render(
             for p in has
         ]
         out.append(
-            "Tell your agent which product analytics records signups and activation. Tin does not connect to it yet."
+            "Tell your agent which product analytics records signups and activation. Tin reads "
+            "PostHog directly; for other tools it uses what you share."
         )
     out += [
         "",

@@ -1,4 +1,4 @@
-"""Offline checks for outreach.paying_segment against synthetic, Stripe-shaped subscriptions."""
+"""Offline checks for outreach.paying_segment through Tin's offline Stripe binding."""
 
 import json
 import runpy
@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+from connection_fakes import FakeStripeConnection
 
 from tin_lite.community import REPOSITORY_ROOT
 from tin_lite.workflow_code import validate_code_definition, validate_code_result
@@ -208,40 +209,14 @@ def subscription(
     }
 
 
-class FakeStripe:
-    """Pages like GET /v1/subscriptions and enforces the gateway's raw response bound."""
-
-    def __init__(self, subscriptions, status=200):
-        self.subscriptions = sorted(subscriptions, key=lambda s: (-s["created"], s["id"]))
-        self.status = status
-        self.calls = []
-
-    async def request(self, *, service, step, path, method="GET", params=None, body=None):
-        assert (service, path, method, body) == ("stripe", "/v1/subscriptions", "GET", None)
-        assert len(self.calls) < 8, "the declared service allows eight calls"
-        assert step not in {s for s, _ in self.calls}, "step IDs must be stable and unique"
-        assert all(isinstance(v, (str, int)) for v in params.values()), "scalar params only"
-        self.calls.append((step, dict(params)))
-        if self.status != 200:
-            return {"status": self.status, "data": {"error": {"type": "invalid_request_error"}}}
-        rows = [
-            s
-            for s in self.subscriptions
-            if params["created[gte]"] <= s["created"] <= params["created[lte]"]
-        ]
-        if "starting_after" in params:
-            ids = [s["id"] for s in rows]
-            rows = rows[ids.index(params["starting_after"]) + 1 :]
-        page = rows[: params["limit"]]
-        data = {
-            "object": "list",
-            "data": page,
-            "has_more": len(rows) > len(page),
-            "url": "/v1/subscriptions",
-        }
-        if len(json.dumps(data, indent=2).encode()) > LIMIT:
-            raise ValueError("oversized response")
-        return {"status": 200, "data": data}
+def stripe(subscriptions, **options):
+    """Tin's offline `payments.stripe` binding over Stripe-shaped subscriptions."""
+    return FakeStripeConnection(
+        {"subscriptions": subscriptions, "customers": []},
+        service="stripe",
+        max_response_bytes=LIMIT,
+        **options,
+    )
 
 
 class Context(dict):
@@ -251,10 +226,10 @@ class Context(dict):
 
 
 async def run(subscriptions, **inputs):
-    stripe = FakeStripe(subscriptions)
-    result = await MODULE.run(Context(stripe), inputs)
+    binding = stripe(subscriptions)
+    result = await MODULE.run(Context(binding), inputs)
     validate_code_result(json.dumps(result).encode(), validate_code_definition(DEFINITION))
-    return result["content"], stripe
+    return result["content"], binding
 
 
 def evidence(content):
@@ -306,9 +281,13 @@ def ordinary():
 def test_manifest_declares_a_read_only_stripe_binding_and_the_rendered_path():
     spec = validate_code_definition(DEFINITION)
     assert DEFINITION["integration_requirements"] == [
-        {"provider_key": "custom.api.stripe", "capabilities": ["http.read"], "required": true}
-        for true in [True]
+        {
+            "provider_key": "payments.stripe",
+            "capabilities": ["subscriptions.read"],
+            "required": True,
+        }
     ]
+    assert DEFINITION["code"]["services"]["stripe"]["provider_key"] == "payments.stripe"
     assert DEFINITION["code"]["services"]["stripe"]["max_calls"] == MODULE.MAX_CALLS
     assert DEFINITION["code"]["services"]["stripe"]["max_response_bytes"] == LIMIT
     assert DEFINITION["code"]["output"]["path"] == MODULE.OUTPUT
@@ -356,11 +335,15 @@ async def test_ordinary_account_names_who_to_aim_at_and_hands_it_off():
     assert "Metadata source: podcast" in content
     data = evidence(content)
     assert data["fetched"] == 50 and data["judged"] == 50 and not data["truncated"]
-    first, *rest = stripe.calls
-    assert first[0] == "probe" and first[1]["limit"] == 3
-    assert first[1]["status"] == "all" and first[1]["expand[0]"] == "data.customer"
-    assert first[1]["created[lte]"] == int(NOW.timestamp()) - 60 * DAY
-    assert all(params["limit"] > 3 for _, params in rest)
+    # Projected records are small: fifty subscriptions with their customers fit one read.
+    assert [call["step"] for call in stripe.calls] == ["page_1"]
+    assert stripe.calls[0]["operation"] == "subscriptions.list"
+    assert stripe.calls[0]["arguments"] == {
+        "status": "all",
+        "created_gte": int(NOW.timestamp()) - 365 * DAY,
+        "created_lte": int(NOW.timestamp()) - 60 * DAY,
+        "limit": 100,
+    }
     tests = {(t["family"], t["value"]): t for t in data["tests"]}
     # One price per interval: "Entry price" repeats "Billing interval" and is shown once.
     assert not any(family == "Entry price" for family, _ in tests)
@@ -418,24 +401,47 @@ async def test_failed_payments_come_before_retargeting():
     assert "a payment failed 14" in content
 
 
-async def test_large_records_shrink_pages_and_disclose_truncation():
+async def test_fitted_pages_continue_from_the_cursor_and_disclose_truncation():
     subs = [
-        subscription(n, email=f"a@team{n}.com", started_days_ago=100 + n, items=8)
-        for n in range(200)
+        subscription(n, email=f"a@team{n}.com", started_days_ago=100 + n % 250, items=6)
+        for n in range(1000)
     ]
-    content, stripe = await run(subs)
-    limits = [params["limit"] for _, params in stripe.calls]
-    assert len(stripe.calls) == 8 and limits[0] == 3 and max(limits[1:]) <= 4
+    content, binding = await run(subs)
+    assert len(binding.calls) == 8
+    # Tin fits the leading records of each 100-record page; the next read starts right after.
+    pages = [call["response"] for call in binding.calls]
+    assert all(page["truncated"] and page["has_more"] for page in pages)
+    for page, after in zip(pages, binding.calls[1:], strict=False):
+        assert after["arguments"]["cursor"] == page["next_cursor"] == page["records"][-1]["id"]
+    read = [record["id"] for page in pages for record in page["records"]]
+    newest = sorted(subs, key=lambda s: (-s["created"], s["id"]))[: len(read)]
+    assert read == [s["id"] for s in newest], "no subscription is skipped or read twice"
+    assert evidence(content)["fetched"] == len(read)
     assert "Older subscriptions exist that this run could not read" in content
     assert "eight-request limit was reached" in content
 
 
-async def test_refused_key_writes_a_setup_diagnostic_after_one_call():
-    stripe = FakeStripe(ordinary(), status=401)
-    result = await MODULE.run(Context(stripe), {})
-    assert len(stripe.calls) == 1
+@pytest.mark.parametrize(
+    ("refusal", "shown"),
+    [
+        ("permission_denied", "cannot read Subscriptions"),
+        ("authentication_failed", "rejected the stored restricted key"),
+        ("rate_limited", "rate-limited this read"),
+    ],
+)
+async def test_refused_read_writes_a_setup_diagnostic_after_one_call(refusal, shown):
+    binding = stripe(ordinary(), refuse={"page_1": refusal})
+    result = await MODULE.run(Context(binding), {})
+    assert len(binding.calls) == 1
     assert "Status: connection needs attention" in result["content"]
+    assert shown in result["content"]
     assert "restricted key with Read access to Subscriptions and Customers" in result["content"]
+
+
+async def test_a_binding_without_the_declared_capability_is_a_package_error_not_a_diagnostic():
+    binding = stripe(ordinary(), capabilities=("customers.read",))
+    with pytest.raises(ValueError, match="declared contract"):
+        await MODULE.run(Context(binding), {})
 
 
 def mutate(change):
@@ -444,32 +450,47 @@ def mutate(change):
     return subs
 
 
+class Altered(FakeStripeConnection):
+    """Serves a plausible projected page, then changes it the way a bad response would."""
+
+    def __init__(self, change):
+        super().__init__({"subscriptions": ordinary(), "customers": []}, service="stripe")
+        self.change = change
+
+    async def call(self, **kwargs):
+        page = await super().call(**kwargs)
+        self.change(page)
+        return page
+
+
 @pytest.mark.parametrize(
-    "subs",
+    "change",
     [
-        mutate(lambda s: s[0].update(object="invoice")),
-        mutate(lambda s: s[0].update(start_date="yesterday")),
-        mutate(lambda s: s[0].pop("items")),
-        mutate(
-            lambda s: s[0]["items"]["data"][0].pop("price") and s[0]["items"]["data"][0].pop("plan")
-        ),
-        mutate(lambda s: s[1].update(id=s[0]["id"], created=s[0]["created"] - 1)),
+        lambda p: p["records"][0].pop("id"),
+        lambda p: p["records"][0].update(start_date=None, created=None),
+        lambda p: p["records"][0].update(start_date="yesterday"),
+        lambda p: p["records"][0].update(items=None),
+        lambda p: p["records"][0]["items"][0].update(price_id=None),
+        lambda p: p["records"][0].update(customer=None),
+        lambda p: p["records"][1].update(id=p["records"][0]["id"]),
+        lambda p: p.update(has_more=True, next_cursor=None),
+        lambda p: p.pop("records"),
     ],
-    ids=["not-a-subscription", "bad-timestamp", "no-items", "no-price", "duplicate"],
+    ids=[
+        "no-id",
+        "no-start",
+        "bad-timestamp",
+        "no-items",
+        "no-price",
+        "no-customer",
+        "duplicate",
+        "more-without-cursor",
+        "not-a-page",
+    ],
 )
-async def test_plausible_but_malformed_stripe_data_fails_instead_of_reporting(subs):
+async def test_plausible_but_malformed_stripe_data_fails_instead_of_reporting(change):
     with pytest.raises(ValueError):
-        await MODULE.run(Context(FakeStripe(subs)), {})
-
-
-async def test_invalid_envelope_fails():
-    class Broken(FakeStripe):
-        async def request(self, **kwargs):
-            await super().request(**kwargs)
-            return {"status": 200, "data": {"object": "customer"}}
-
-    with pytest.raises(ValueError, match="subscription list"):
-        await MODULE.run(Context(Broken(ordinary())), {})
+        await MODULE.run(Context(Altered(change)), {})
 
 
 @pytest.mark.parametrize(
@@ -484,10 +505,10 @@ async def test_invalid_envelope_fails():
     ],
 )
 async def test_invalid_inputs_are_rejected_before_any_request(inputs):
-    stripe = FakeStripe(ordinary())
+    binding = stripe(ordinary())
     with pytest.raises(ValueError):
-        await MODULE.run(Context(stripe), inputs)
-    assert stripe.calls == []
+        await MODULE.run(Context(binding), inputs)
+    assert binding.calls == []
 
 
 async def test_excluded_domains_and_identifying_metadata_never_become_segments():
@@ -528,23 +549,28 @@ def test_statistics_match_reference_values():
     assert low == pytest.approx(0.4902, abs=1e-4) and high == pytest.approx(0.9433, abs=1e-4)
 
 
-def test_price_handles_api_versions_and_usage_prices():
-    monthly, currency, label, interval = MODULE.price(
-        [{"plan": {"amount": 12000, "currency": "eur", "interval": "year", "interval_count": 1}}],
-        None,
-    )
-    assert (monthly, currency, label, interval) == (1000, "eur", "EUR 120.00/year", "year")
-    metered = [
-        {"price": {"unit_amount": None, "currency": "usd", "recurring": {"interval": "month"}}}
-    ]
-    assert MODULE.price(metered, "usd")[0] is None
+def test_price_reads_projected_items_and_usage_prices():
+    item = {
+        "price_id": "price_1",
+        "product_id": "prod_1",
+        "unit_amount": 12000,
+        "currency": "eur",
+        "interval": "year",
+        "interval_count": 1,
+        "quantity": 1,
+    }
+    assert MODULE.price([item]) == (1000, "eur", "EUR 120.00/year", "year")
+    quarterly = {**item, "unit_amount": 3000, "interval": "month", "interval_count": 3}
+    assert MODULE.price([quarterly]) == (1000, "eur", "EUR 30.00/3 months", "month")
+    metered = {**item, "unit_amount": None, "currency": "usd", "interval": "month"}
+    assert MODULE.price([metered])[0] is None
 
 
 CASE_FIXTURES = {
-    "ordinary": (ordinary, 200),
-    "too_few_customers": (too_few, 200),
-    "no_real_difference": (no_difference, 200),
-    "refused_key": (ordinary, 401),
+    "ordinary": (ordinary, {}),
+    "too_few_customers": (too_few, {}),
+    "no_real_difference": (no_difference, {}),
+    "refused_key": (ordinary, {"page_1": "permission_denied"}),
 }
 
 
@@ -553,8 +579,8 @@ async def test_qualification_cases_pass_on_their_fixtures():
     qualification = Qualification.model_validate_json(raw.read_text())
     assert {case.id for case in qualification.cases} == set(CASE_FIXTURES)
     for case in qualification.cases:
-        build, status = CASE_FIXTURES[case.id]
-        result = await MODULE.run(Context(FakeStripe(build(), status=status)), case.inputs)
+        build, refuse = CASE_FIXTURES[case.id]
+        result = await MODULE.run(Context(stripe(build(), refuse=refuse)), case.inputs)
         report = assess_output(case, status="succeeded", content=result["content"].encode())
         assert report["status"] == "passed", (case.id, report["checks"])
 

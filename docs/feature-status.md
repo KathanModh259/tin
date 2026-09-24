@@ -1,6 +1,6 @@
 # Feature status and release readiness
 
-Current as of September 22, 2026. This is the current capability overview;
+Current as of September 24, 2026. This is the current capability overview;
 internal implementation plans and production acceptance records are not part of this source release.
 “Implemented” does not mean enabled for every deployment, independently security-audited,
 or verified in a fresh self-hosted installation. The live Registry supplies each workflow's
@@ -14,6 +14,7 @@ inputs, prerequisites and supported schedule modes.
 | Built-in workflows | Context, research, visibility/site audits, keyword and content planning, a paid ads assessment (Google Search, advisory), an approval-gated Google Ads launch and a daily Google Ads monitor, style capture, drafting, diagrams, product QA, video and email outreach. | Provider configuration, connected resources and workflow-specific execution limits still apply. |
 | Public workflow packages | Source validation and explicit maintainer registration for deterministic Python, multi-step managed-model Python, and Codex procedures. Catalog sync publishes pinned packages through the existing Registry. | Source support is not a production rollout. Unselected packages and shipped examples do not become customer workflows. Package runtime limits and normal billing still apply. |
 | Product analytics brief | Explicit public PostHog procedure package: ordered activation, trends, traffic, error signals and a screened breakdown. Manual, daily and weekly definitions reuse saved workflows. | One connected provider project; no identity joins, recommendations or external delivery. See [qualification limits](product-analytics-brief.md). Source registration is not deployment. |
+| Stripe and PostHog connections | First-party read-only `payments.stripe` (founder-pasted restricted key, validated per resource) and `analytics.posthog` (OAuth with PKCE, one selected project, US/EU Cloud) connections. Registered operations return server-side projected records with cursor paging for code and procedure bindings; offline fakes support package tests. See [the guide](stripe-and-posthog-connections.md). | Reads only; HogQL limited to one bounded SELECT without OFFSET. PostHog needs `TIN_LITE_POSTHOG_OAUTH_ENABLED` and a public https origin. Fixture-tested; no live Stripe or PostHog acceptance yet. Self-hosted PostHog is not supported. |
 | Workflow creation and qualification | A repo-owned creator proposes packages and cases. Shared HTTP/MCP checks validate pinned files and assess existing run outputs and model costs; a CLI can start explicitly budgeted cases. | Creator installation uses private activation. No automatic publication, dashboard qualification editor or live analytics acceptance. Fixture checks do not establish model quality or measured cost. |
 | Organic traffic system | The current parent can plan, optionally prepare technical fixes, draft the next eligible planned item, wait for review/revisions and deliver the approved article as an unmerged GitHub PR. | GitHub delivery requires the selected connection. Without GitHub, or in draft-only mode, the approved Markdown remains in project Files. Plan dates are not an automatic six-month publishing schedule. |
 | Content review | Read the draft, request changes in text, review a new revision and approve through dashboard or MCP. Generation notes stay separate from publishable copy. | Approval applies to the reviewed revision. PR delivery neither merges the PR nor publishes the website. |
@@ -40,7 +41,8 @@ run spends credits. Hosted billing enablement alone does not open private execut
 | Private `codex.procedure` | On-demand isolated procedures with declared project API connections, producing a bounded project artifact or an unmerged PR through the connected GitHub gateway. | Private procedure schedules, browser/Studio profiles, or a general one-command skill import. |
 
 Code-only bounded execution uses no Tin credits. Managed model steps use hosted credits;
-custom API requests use the connected provider account, which may charge separately. The
+custom API, Stripe and PostHog requests use the connected provider account, which may charge
+separately. The
 trusted gateway inserts credentials; author code never receives the reusable key. Model access
 uses Tin's server keys on hosted Tin and the operator's keys when self-hosted. The code
 model contract currently admits only the explicitly registered OpenAI Luna and Astra routes;
@@ -49,7 +51,8 @@ or prices.
 
 Contributor contracts:
 [activation](private-workflow-activation.md), [code execution](code-workflows.md),
-[model steps](code-model-workflows.md), [API connections](project-api-connections.md), and
+[model steps](code-model-workflows.md), [API connections](project-api-connections.md),
+[Stripe and PostHog connections](stripe-and-posthog-connections.md), and
 [code schedules](code-workflow-schedules.md). Code-only calendar execution has been verified;
 paid-model scheduling has fixture coverage, not production acceptance.
 

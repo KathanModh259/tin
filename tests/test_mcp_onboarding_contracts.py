@@ -218,3 +218,61 @@ async def test_integration_connection_returns_the_link_and_surfaces_provider_err
             project_id=str(f.project.id),
             provider_key="infra.github",
         )
+
+
+async def test_stripe_connects_through_tins_page_never_through_chat(account):
+    f = account
+    url = f"https://lite.tin.test/connect?project={f.project.id}&providers=payments.stripe"
+    f.runtime.integrations.start_connect = AsyncMock(return_value=ConnectStart(url))
+    started = await call(
+        f,
+        "start_integration_connection",
+        project_id=str(f.project.id),
+        provider_key="payments.stripe",
+    )
+    assert started["setup_url"] == started["authorization_url"] == url
+    assert "never in this chat" in started["relay"][0]
+    batch = await call(
+        f,
+        "start_integration_connections",
+        project_id=str(f.project.id),
+        providers=["payments.stripe", "infra.github"],
+    )
+    assert batch["providers"] == ["payments.stripe", "infra.github"]
+    assert batch["url"].endswith("&providers=payments.stripe,infra.github")
+    assert "Stripe" in batch["relay"][0] and "never in chat" in batch["relay"][0]
+    from tin_lite.integrations import registered_integrations
+    from tin_lite.mcp_server import _mcp_integration_view
+
+    stripe = next(d for d in registered_integrations() if d.key == "payments.stripe")
+    listed = _mcp_integration_view(stripe, None, configured=True)
+    assert listed["setup_url"].startswith("https://dashboard.stripe.com/apikeys/create?")
+    assert listed["capabilities"] == [
+        "subscriptions.read",
+        "customers.read",
+        "invoices.read",
+        "prices.read",
+        "charges.read",
+    ]
+
+
+async def test_posthog_connects_through_oauth_and_names_the_project_choice(account):
+    f = account
+    url = "https://oauth.posthog.com/oauth/authorize/?required_access_level=project"
+    f.runtime.integrations.start_connect = AsyncMock(return_value=ConnectStart(url))
+    started = await call(
+        f,
+        "start_integration_connection",
+        project_id=str(f.project.id),
+        provider_key="analytics.posthog",
+    )
+    assert started["authorization_url"] == url
+    assert "pick the one PostHog project" in started["relay"][0]
+    batch = await call(
+        f,
+        "start_integration_connections",
+        project_id=str(f.project.id),
+        providers=["analytics.posthog", "payments.stripe"],
+    )
+    assert batch["url"].endswith("&providers=analytics.posthog,payments.stripe")
+    assert "PostHog asks which project" in batch["relay"][0]

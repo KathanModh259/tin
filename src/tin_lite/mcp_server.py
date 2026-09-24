@@ -261,6 +261,7 @@ def _mcp_integration_view(
         "access_label": definition.access_label,
         "capabilities": list(definition.capabilities),
         "unlocks": list(definition.unlocks),
+        "setup_url": getattr(definition, "setup_url", None),
         "configured": configured,
         "connection_id": str(connection.id) if connection is not None else None,
         "status": connection.status if connection is not None else "available",
@@ -3727,6 +3728,35 @@ def create_mcp_app(
         except IntegrationError as exc:
             raise ToolError(str(exc)) from exc
         project = await runtime().database.get_project(parsed_project_id)
+        if provider_key == "payments.stripe":
+            # A restricted key is entered only in Tin's page; the result is a setup link.
+            return {
+                "setup_url": started.authorization_url,
+                "authorization_url": started.authorization_url,
+                "open_command": _open_command(started.authorization_url),
+                **_founder_words(
+                    relay=(
+                        f"I am opening Stripe setup for "
+                        f"{project.name if project else 'your project'} in your browser. Use "
+                        "its link to create a read-only restricted key in Stripe, then paste "
+                        "the key on that page, never in this chat. Tell me when it says "
+                        "connected."
+                    )
+                ),
+            }
+        if provider_key == "analytics.posthog":
+            return {
+                "authorization_url": started.authorization_url,
+                "open_command": _open_command(started.authorization_url),
+                **_founder_words(
+                    relay=(
+                        f"I am opening PostHog in your browser for "
+                        f"{project.name if project else 'your project'}. Approve Tin's read "
+                        "access and pick the one PostHog project for this business. Tell me "
+                        "when Tin says connected."
+                    )
+                ),
+            }
         return {
             "authorization_url": started.authorization_url,
             "open_command": _open_command(started.authorization_url),
@@ -3746,14 +3776,23 @@ def create_mcp_app(
         """One link for several connections: a page listing only the integrations you name,
         each with its Connect button and picker, for the founder to work through in one visit.
 
-        providers are Tin integration keys (infra.github, analytics.gsc, workspace.google).
+        providers are Tin integration keys (infra.github, analytics.gsc, workspace.google,
+        ads.google, payments.stripe, analytics.posthog). Stripe keys are pasted on that page,
+        never in chat.
         Open the link for the founder (open_command) or paste it; confirm each with
         get_integration afterwards. Tell the founder the result's `relay` in your words.
         """
         token = await caller()
         parsed_project_id = _mcp_uuid(project_id, field="project_id")
         await require_project(parsed_project_id, token, tool_name="start_integration_connections")
-        known = {"infra.github", "analytics.gsc", "workspace.google", "ads.google"}
+        known = {
+            "infra.github",
+            "analytics.gsc",
+            "workspace.google",
+            "ads.google",
+            "payments.stripe",
+            "analytics.posthog",
+        }
         chosen = [key.strip() for key in providers if key.strip()]
         unknown = [key for key in chosen if key not in known]
         if not chosen or unknown:
@@ -3771,6 +3810,8 @@ def create_mcp_app(
             "analytics.gsc": "Google Search Console",
             "workspace.google": "Google Workspace",
             "ads.google": "Google Ads",
+            "payments.stripe": "Stripe",
+            "analytics.posthog": "PostHog",
         }
         listed = ", ".join(names[key] for key in chosen)
         return {
@@ -3782,6 +3823,12 @@ def create_mcp_app(
                     f"I am opening one page where you connect {listed} for "
                     f"{project.name if project else 'your project'}. Each takes about a minute"
                     + ("; GitHub also asks which repository" if "infra.github" in chosen else "")
+                    + ("; PostHog asks which project" if "analytics.posthog" in chosen else "")
+                    + (
+                        "; for Stripe you paste a read-only restricted key there, never in chat"
+                        if "payments.stripe" in chosen
+                        else ""
+                    )
                     + ". Tell me when it says connected."
                 )
             ),
@@ -3849,7 +3896,7 @@ def create_mcp_app(
         }
 
     @server.tool()
-    async def disconnect_integration(project_id: str, provider_key: str) -> dict[str, bool]:
+    async def disconnect_integration(project_id: str, provider_key: str) -> dict[str, Any]:
         """Disconnect one project-owned integration and revoke it where supported."""
         token = await caller()
         clerk_user_id = token.subject
@@ -3861,6 +3908,16 @@ def create_mcp_app(
         )
         if not disconnected:
             raise LookupError("integration not found")
+        if provider_key == "payments.stripe":
+            return {
+                "disconnected": True,
+                **_founder_words(
+                    relay=(
+                        "Tin deleted its copy of the Stripe key. Also delete the Tin restricted "
+                        "key in Stripe under Developers, API keys, so it stops working."
+                    )
+                ),
+            }
         return {"disconnected": True}
 
     host = urlsplit(settings.switchboard_public_url).hostname or "127.0.0.1"

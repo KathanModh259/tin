@@ -110,7 +110,8 @@ Private copies have narrower rules than public packages. For the test copy:
   workflow first if your package reads its output.
 
 Some packages can't be tested privately yet: procedures that need the browser profile, and
-integrations other than GitHub, Google Workspace read access and
+integrations other than GitHub, Google Workspace read access,
+[Stripe, PostHog](stripe-and-posthog-connections.md) and
 [project API connections](project-api-connections.md). Say so in the PR; a maintainer can
 run those.
 
@@ -175,7 +176,10 @@ The code package runtime is Python 3.12.8 with the standard library, up to 60 se
 one declared text artifact. It supports up to eight managed model calls across four routes;
 only the registered OpenAI Luna and Astra routes are currently admitted. There is no `pip`
 installation, raw credential injection or direct network access. Use declared
-[project service bindings](project-api-connections.md) for supported external requests.
+[project service bindings](project-api-connections.md) for supported external requests; for
+Stripe or PostHog data, bind the first-party connections described in
+[Stripe and PostHog connections](stripe-and-posthog-connections.md), which also has offline
+test fakes.
 See [code execution](code-workflows.md) and [model steps](code-model-workflows.md) for exact bounds.
 
 If the workflow needs longer durable orchestration, multiple distinct activities, or a

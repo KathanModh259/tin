@@ -46,6 +46,8 @@ your own accounts before use; ordinary contributor tests need no production cred
 - [Private activation](private-workflow-activation.md), [code workflows](code-workflows.md),
   [managed model steps](code-model-workflows.md) and [code schedules](code-workflow-schedules.md).
 - [Project API connections](project-api-connections.md): secure credentials and external requests.
+- [Stripe and PostHog connections](stripe-and-posthog-connections.md): the first-party read-only
+  connections, their operations, projected records and offline test fakes.
 - [Paid ads assessment](paid-ads-assessment-implementation.md): the native LLM flow that decides
   whether Google Search ads fit, its evidence sources, scorer and outputs.
 - [Google Ads launch and monitor](paid-ads-launch-implementation.md): the identifier-entry
