@@ -3,7 +3,7 @@
   "assumptions": [
     "Cases are author proposals against synthetic Search Console shapes. A live run needs a project-owned analytics.gsc connection with a selected property and a named payer; none is included here.",
     "One Search Console property per saved workflow. Two equal-length windows of 14-90 days, ending at least three days before today so late-arriving data is excluded. Position is compared impression-weighted, never as an average of averages.",
-    "Every provider response is bounded by row_limit and a 64000-byte cap, so a response can be censored. A censored response bounds coverage; it never establishes that a page or query is absent.",
+    "Every response is bounded by a 64000-byte binding, roughly 250-550 rows. Tin keeps the leading rows that fit and marks the rest with truncated and next_start_row. A censored response bounds coverage; it never establishes that a page or query is absent. Filters narrow a request to one query or page instead of paging site-wide.",
     "Run success establishes that an artifact was delivered. A useful report additionally requires that each reported page carries exactly one verdict and the figures that selected it."
   ],
   "cost_drivers": [
@@ -70,7 +70,7 @@
     },
     {
       "id": "censored_response_bounds_the_verdicts",
-      "description": "The page response returns exactly its row limit, so coverage is partial. Status must be partial, affected pages must fall to insufficient evidence, and no page may be called absent.",
+      "description": "The site-wide page response comes back with truncated: true and a next_start_row, so coverage is partial. Status must be partial, affected pages must fall to insufficient evidence, and no page may be called absent.",
       "inputs": {
         "window_days": 28,
         "as_of_utc": "2026-01-12",
@@ -85,7 +85,7 @@
         "contains": [
           "Status: partial",
           "insufficient evidence",
-          "censored"
+          "truncated"
         ],
         "excludes": [
           "Status: complete",

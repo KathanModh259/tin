@@ -4,7 +4,7 @@
     "key": "content.refresh_decay",
     "title": "Refresh the content that stopped working",
     "description": "Read Search Console for the pages already published, separate real decay from seasonality, SERP change and self-competition, and give every page one verdict: refresh, consolidate, retarget, retire or leave alone.",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "executor": "codex.procedure",
     "schedule_modes": [
       "on_demand",

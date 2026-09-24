@@ -49,8 +49,10 @@ Not boilerplate. Written for this run, and it names at least:
 
 ## Evidence
 
-Compact JSON at the end: the resolved windows, every request made with its dimensions, row limit,
-returned row count and censored flag, and the per-page and per-query figures the verdicts used.
+Compact JSON at the end: the resolved windows, every request made with its dimensions, filters,
+row limit, start row, returned row count, `truncated` and `next_start_row` when present, and
+the censored verdict from SEARCH_CONSOLE.md's test, then the per-page and per-query figures
+the verdicts used.
 Render it with code from the saved responses. Do not retype numbers into prose by hand, and do
 not reprint whole responses.
 

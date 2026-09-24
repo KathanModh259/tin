@@ -11,14 +11,26 @@ from __future__ import annotations
 import inspect
 import json
 import re
+import shutil
 from pathlib import Path
 
 import jsonschema
 import pytest
 
 from tin_lite.code_services import OPERATIONS
-from tin_lite.community import REPOSITORY_ROOT, ContributedPackage, validate
-from tin_lite.integrations import IntegrationService
+from tin_lite.community import (
+    REPOSITORY_ROOT,
+    ContributedPackage,
+    validate,
+    validate_private_copy,
+)
+from tin_lite.integrations import (
+    GSC_FILTER_DIMENSIONS,
+    GSC_FILTER_OPERATORS,
+    GSC_MAX_FILTERS,
+    GSC_MAX_START_ROW,
+    IntegrationService,
+)
 from tin_lite.procedures import validate_codex_procedure_definition
 from tin_lite.workflow_packages import decode_workflow_source
 
@@ -76,12 +88,37 @@ def test_the_skill_promises_no_more_calls_than_the_binding_allows():
 
 
 def test_the_documented_request_arguments_are_the_ones_the_gateway_accepts():
-    """SEARCH_CONSOLE.md tabulates four arguments. The gateway's field set decides that."""
+    """SEARCH_CONSOLE.md tabulates the arguments. The gateway's field set decides which."""
     _, fields = OPERATIONS[("analytics.gsc", "search_analytics.read")]
     documented = set(re.findall(r"^\| `(\w+)` \|", read("SEARCH_CONSOLE.md"), re.MULTILINE))
     assert documented == set(fields)
-    # No filter and no offset exist, which is why every request is site-wide and censorable.
-    assert "no row offset" in read("SEARCH_CONSOLE.md")
+
+
+def test_the_documented_filters_are_the_ones_the_provider_accepts():
+    text = flat("SEARCH_CONSOLE.md")
+    (dimensions,) = re.findall(r"\*\*Filter dimensions:\*\* (.+?)\. ", text)
+    (operators,) = re.findall(r"\*\*Operators:\*\* (.+?)\. ", text)
+    assert set(re.findall(r"`(\w+)`", dimensions)) == GSC_FILTER_DIMENSIONS
+    assert set(re.findall(r"`(\w+)`", operators)) == GSC_FILTER_OPERATORS
+    assert f"up to {GSC_MAX_FILTERS} filters" in text
+    assert f"0–{GSC_MAX_START_ROW}" in text.replace(",", "")
+
+
+def test_every_filter_the_skill_sends_is_one_the_provider_accepts():
+    text = flat("SKILL.md")
+    filters = re.findall(r'\{"dimension": "(\w+)", "operator": "(\w+)"', text)
+    assert filters, "the skill should show the filters it sends"
+    for dimension, operator in filters:
+        assert dimension in GSC_FILTER_DIMENSIONS
+        assert operator in GSC_FILTER_OPERATORS
+
+
+def test_censoring_is_read_from_the_truncation_flag_and_the_row_limit():
+    """A clamped response says `truncated`; an unclamped full page does not, but may continue."""
+    text = flat("SEARCH_CONSOLE.md")
+    assert "`truncated` is true, or the returned row count equals the requested `row_limit`" in text
+    assert "`next_start_row`" in text
+    assert "Never infer absence from a censored response." in text
 
 
 def test_the_documented_dimensions_are_the_ones_the_provider_allows():
@@ -168,6 +205,21 @@ def test_the_report_refuses_to_reuse_boilerplate_refusals():
     text = read("REPORT.md")
     assert "Not boilerplate" in text
     assert "anonymized query remainder" in text
+
+
+async def test_a_private_copy_activates_with_the_two_documented_changes(tmp_path):
+    """docs/adding-a-workflow.md: on_demand only and a fixed path. Nothing else should be needed."""
+    copy = tmp_path / "workflow_packages" / KEY
+    shutil.copytree(PACKAGE, copy)
+    manifest = json.loads((copy / "workflow.json").read_text(encoding="utf-8"))
+    with pytest.raises(ValueError, match="on_demand"):
+        await validate_private_copy(ContributedPackage(key=KEY, path=copy), root=tmp_path)
+    manifest["definition"]["schedule_modes"] = ["on_demand"]
+    output = manifest["definition"]["procedure"]["output"]
+    output.pop("path_template")
+    output["path"] = "reports/content-refresh/latest.md"
+    (copy / "workflow.json").write_text(json.dumps(manifest), encoding="utf-8")
+    await validate_private_copy(ContributedPackage(key=KEY, path=copy), root=tmp_path)
 
 
 def test_the_package_declares_every_file_it_ships():
