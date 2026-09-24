@@ -1,0 +1,61 @@
+{
+  "package_format": "tin-workflow-package-v1",
+  "definition": {
+    "key": "growth.competitor_watch",
+    "title": "Watch a competitor for changes worth reacting to",
+    "description": "Check a competitor's pricing and changelog pages against the last check, and report only what changed and whether it needs a response.",
+    "executor": "codex.procedure",
+    "version": "1.0.0",
+    "schedule_modes": ["on_demand", "weekly"],
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project_id", "competitor_urls"],
+      "properties": {
+        "project_id": { "type": "string", "format": "uuid" },
+        "competitor_urls": {
+          "type": "array",
+          "title": "Pages to watch",
+          "description": "Public pricing, changelog or product pages to check, one competitor's pages together.",
+          "items": { "type": "string", "maxLength": 500 },
+          "minItems": 1,
+          "maxItems": 5,
+          "x-tin-ui": { "order": 10 }
+        },
+        "competitor_name": {
+          "type": "string",
+          "title": "Competitor name",
+          "maxLength": 200,
+          "default": "",
+          "x-tin-ui": { "control": "text", "order": 20 }
+        },
+        "watch_for": {
+          "type": "string",
+          "title": "What matters most",
+          "description": "What kind of change would actually change what you do, e.g. price moves, a new plan tier, a feature you don't have.",
+          "maxLength": 2000,
+          "default": "",
+          "x-tin-ui": { "control": "textarea", "order": 30 }
+        }
+      }
+    },
+    "procedure": {
+      "prompt_path": "PROMPT.md",
+      "skills_path": "skills",
+      "skill_files": ["skills/competitor-watch/SKILL.md"],
+      "entry_skill": "competitor-watch",
+      "workspace": { "kind": "project.state" },
+      "sandbox": {
+        "profile": "browser",
+        "egress": "open",
+        "timeout_seconds": 1200
+      },
+      "output": {
+        "kind": "project.artifact",
+        "path": "reports/COMPETITOR_WATCH.md",
+        "media_type": "text/markdown",
+        "max_bytes": 60000
+      }
+    }
+  }
+}
