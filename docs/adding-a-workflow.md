@@ -125,7 +125,10 @@ Put the package under `workflow_packages/<key>/`, with the same key in the manif
 Use a descriptive key such as `reports.customer_digest`; reserve `example.*` for examples
 and `custom.*` for project-local copies. Include offline tests under `tests/`: a useful input,
 the expected result, invalid inputs, and any model or integration responses as fixtures.
-Show what happens when a model returns a plausible but unusable result.
+Show what happens when a model returns a plausible but unusable result. A Codex procedure
+with no model routes has no model result to fixture; show the same for a plausible but unusable
+provider response or input instead, such as a truncated read, an empty result or a missing
+selection, in its [qualification cases](workflow-qualification.md) or tests.
 
 Run the static package check and your tests:
 
