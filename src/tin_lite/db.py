@@ -5198,6 +5198,25 @@ class Database:
         )
         return bool(updated)
 
+    async def project_run_narration(self, *, run_id: UUID, summary: str) -> bool:
+        """Show the agent's latest progress line unless product code owns the steps."""
+        summary = " ".join(summary.split())
+        if not summary:
+            return False
+        if len(summary) > 240:
+            summary = summary[:239].rstrip() + "…"
+        updated = await self.pool.fetchval(
+            """
+            UPDATE workflow_runs
+            SET progress_summary = $2, progress_updated_at = now()
+            WHERE id = $1 AND status IN ('pending', 'running') AND progress_step IS NULL
+            RETURNING true
+            """,
+            run_id,
+            summary,
+        )
+        return bool(updated)
+
     async def refresh_email_campaign_progress(self, *, run_id: UUID) -> bool:
         async with self.pool.acquire() as conn:
             return await self._refresh_email_campaign_progress(conn, run_id=run_id)

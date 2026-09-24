@@ -91,6 +91,8 @@ ROLLOUT_MAX_DEPTH = 5
 ROLLOUT_LIST_TIMEOUT_SECONDS = 20.0
 ROLLOUT_READ_TIMEOUT_SECONDS = 45.0
 ROLLOUT_CAPTURE_BUDGET_SECONDS = 90.0
+# Controller narration frames; the dashboard stores a shorter projection.
+PROGRESS_MAX_CHARS = 1000
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -142,6 +144,7 @@ class SandboxProcedureInput(SandboxRunInput):
     project_revision: str | None = None
     failure_sink: Callable[[BaseException], Awaitable[None]] | None = None
     interrupted_output_sink: Callable[[bytes], Awaitable[None]] | None = None
+    progress_sink: Callable[[str], Awaitable[None]] | None = None
 
 
 @dataclass(frozen=True)
@@ -563,6 +566,8 @@ class E2BRuntime:
                         raise RuntimeError("invalid isolated controller observation")
                     assert run_input.usage_sink is not None
                     await run_input.usage_sink(value)
+                elif line.startswith("TIN_CODEX_PROGRESS="):
+                    await _deliver_progress(line.partition("=")[2], run_input)
 
         try:
             if run_input.context.get("output", {}).get("validator") == "content-draft.v3":
@@ -1053,6 +1058,28 @@ def _run_secrets(run_input: SandboxRunInput) -> tuple[str, ...]:
 
 def _redact(value: str, secrets: tuple[str, ...]) -> str:
     return redact_text(value, secrets)[0]
+
+
+async def _deliver_progress(encoded: str, run_input: SandboxProcedureInput) -> None:
+    """Narration is display text, not accounting: drop malformed frames, never fail."""
+    sink = getattr(run_input, "progress_sink", None)
+    if sink is None:
+        return
+    try:
+        value = json.loads(encoded)
+    except ValueError:
+        return
+    text = value.get("text") if isinstance(value, dict) else None
+    if not isinstance(text, str) or not text.strip():
+        return
+    try:
+        await sink(_redact(text[:PROGRESS_MAX_CHARS], _run_secrets(run_input)))
+    except Exception:
+        logger.warning(
+            "procedure progress update failed",
+            extra={"execution_key": run_input.execution_key},
+            exc_info=True,
+        )
 
 
 def _task_event(line: str) -> SandboxTaskEvent | None:

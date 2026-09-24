@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 import secrets
 from datetime import UTC, datetime
@@ -34,6 +35,8 @@ from tin_lite.codex_api_pricing import price_response
 from tin_lite.codex_web_evidence import WebEvidence
 from tin_lite.usage_capture import count, object_value
 from tin_lite.workflow_costs import session_funded
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 MAX_EVENT_BYTES = 2 * 1024 * 1024
@@ -506,6 +509,13 @@ class CodexAPIRelay:
         if upstream.status_code != 200:
             status = upstream.status_code
             await upstream.aclose()
+            # Provider bodies can echo prompt content; keep only the status code.
+            logger.warning(
+                "Codex API upstream rejected run=%s operation=%r upstream_status=%s",
+                run_id,
+                operation,
+                status,
+            )
             raise HTTPException(
                 429 if status == 429 else 502,
                 "OpenAI rejected the Codex API request; the attempt will not be replayed",
@@ -619,10 +629,28 @@ async def relay_codex_api(run_id: UUID, operation: str, request: Request):
     async for chunk in request.stream():
         raw.extend(chunk)
         if len(raw) > DIAGRAM_CONTRACT["max_request_bytes"]:
+            _log_rejection(run_id, operation, 413, "Codex API request exceeds its context bound")
             raise HTTPException(413, "Codex API request exceeds its context bound")
     try:
         return await asyncio.wait_for(
             relay.relay(run_id, grant, bytes(raw), operation, request.headers), timeout=200
         )
     except TimeoutError:
+        _log_rejection(run_id, operation, 504, "Codex API request outcome is unconfirmed")
         raise HTTPException(504, "Codex API request outcome is unconfirmed") from None
+    except HTTPException as exc:
+        reason = getattr(exc, "reason", None)
+        _log_rejection(run_id, operation, exc.status_code, exc.detail, reason)
+        raise
+
+
+def _log_rejection(run_id, operation, status, detail, reason=None):
+    # Details are Tin's own fixed messages; never log request bodies or grants.
+    logger.warning(
+        "Codex API relay rejected run=%s operation=%r status=%s reason=%s detail=%s",
+        run_id,
+        operation,
+        status,
+        reason,
+        detail,
+    )

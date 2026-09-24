@@ -115,7 +115,8 @@ def api_terms(definition, *, session_budget=False):
     if (
         session_budget
         and definition.get("executor") == "codex.procedure"
-        and procedure.get("sandbox", {}).get("profile", "default") in {"default", "isolated"}
+        and procedure.get("sandbox", {}).get("profile", "default")
+        in {"default", "isolated", "browser"}
         and procedure_contract(procedure.get("output", {}).get("validator")) != DIAGRAM_CONTRACT
     ):
         terms.update(

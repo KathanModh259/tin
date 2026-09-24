@@ -23,6 +23,7 @@ OPEN_PULL_REQUEST_EVIDENCE = Path("/home/user/.tin-lite/open-pull-requests.json"
 OPEN_PULL_REQUEST_EVIDENCE_MAX_BYTES = 250_000
 TURN_IDLE_TIMEOUT_SECONDS = 15 * 60
 PROCEDURE_HEARTBEAT_SECONDS = 30
+PROGRESS_MAX_CHARS = 1000
 ISOLATED = os.environ.get("TIN_PROCEDURE_ISOLATED") == "1"
 ISOLATION_HELPER = ["/usr/bin/sudo", "-n", "/opt/tin-lite/isolated-procedure"]
 OUTPUT_SCHEMA = {
@@ -73,6 +74,17 @@ def _reader(stream: Any, output: queue.Queue[str | None]) -> None:
     for line in stream:
         output.put(line)
     output.put(None)
+
+
+def _progress(text: str) -> None:
+    # Narration only: structured results are JSON and stay in the checkpoint path.
+    # The switchboard redacts run secrets and bounds this again before storing it.
+    text = " ".join(text.split())
+    if ISOLATED and text and not text.startswith(("{", "[")):
+        print(
+            "TIN_CODEX_PROGRESS=" + json.dumps({"text": text[:PROGRESS_MAX_CHARS]}),
+            flush=True,
+        )
 
 
 def _heartbeat(stop: threading.Event) -> None:
@@ -756,6 +768,7 @@ def execute() -> int:
                 item = params.get("item", {})
                 if isinstance(item, dict) and item.get("type") == "agentMessage":
                     last_agent_message = str(item.get("text", ""))
+                    _progress(last_agent_message)
             if method == "turn/completed" and isinstance(params, dict):
                 completed = params.get("turn", {})
                 status = completed.get("status") if isinstance(completed, dict) else None
