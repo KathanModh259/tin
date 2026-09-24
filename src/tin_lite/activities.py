@@ -676,6 +676,14 @@ class TinActivities:
                 )
                 raise
 
+    def _progress_sink(self, run_id: UUID) -> Callable[[str], Awaitable[None]]:
+        """Project redacted controller narration to Postgres, never to Temporal."""
+
+        async def sink(text: str) -> None:
+            await self._db.project_run_narration(run_id=run_id, summary=text)
+
+        return sink
+
     def _rollout_sink(
         self,
         *,
@@ -3173,6 +3181,8 @@ class TinActivities:
                                 if interrupted_procedure.eligible(procedure)
                                 else None
                             ),
+                            # Card runs keep no agent narration, as they keep no rollouts.
+                            progress_sink=None if payment_card else self._progress_sink(run_id),
                             project_revision=(
                                 run.expected_head_sha
                                 if (

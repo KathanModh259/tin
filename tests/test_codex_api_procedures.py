@@ -379,6 +379,22 @@ async def test_context_and_request_limits_are_pinned_before_paid_intent(publicat
         await relay.close()
 
 
+async def test_relay_rejections_are_logged_without_request_content(publication_db, caplog):
+    run, relay, client, sent = await setup_relay(publication_db)
+    try:
+        with caplog.at_level("WARNING", logger="tin_lite.codex_api_relay"):
+            response = await post(client, run, {**BODY, "input": "private-prompt" * 30000})
+        assert response.status_code == 413
+        assert not sent
+        [record] = [r for r in caplog.records if r.name == "tin_lite.codex_api_relay"]
+        message = record.getMessage()
+        assert f"run={run.id}" in message and "status=413" in message
+        assert "private-prompt" not in message
+    finally:
+        await client.aclose()
+        await relay.close()
+
+
 async def test_multiple_searches_compaction_and_retry_settle_once(billed, monkeypatch):
     f = billed
     monkeypatch.setattr(

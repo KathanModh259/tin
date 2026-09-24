@@ -2190,6 +2190,7 @@ function systemRunDetailHtml(run, includeClose = true) {
       <span><code>result</code><strong>${output}</strong></span>
     </div>
     ${run.error_message ? `<p class="system-run-error">${escapeHtml(run.error_message)}</p>` : ""}
+    ${run.status === "failed" && run.progress_summary ? `<p class="system-run-error">Last update before it stopped: ${escapeHtml(run.progress_summary)}</p>` : ""}
     ${run.retained_output && (!run.error_message || run.retained_output.reason === "execution_interrupted") ? `<p class="system-run-error">${escapeHtml(retainedOutputMessage(run))}</p>` : ""}
     ${run.workflow_name === "outreach.email_campaign" ? emailCampaignRunDetail(run, detail) : ""}
     ${includeClose ? `<button class="system-run-close" type="button" data-observe-run="${escapeHtml(run.id)}" aria-label="Close ${escapeHtml(workflow?.title || "run")} details">Close</button>` : ""}

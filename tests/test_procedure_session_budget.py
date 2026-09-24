@@ -64,7 +64,7 @@ def test_only_ordinary_root_procedures_select_session_terms(profile, validator):
         "procedure": {"sandbox": {"profile": profile}, "output": {"validator": validator}},
     }
     selected = api_terms(definition, session_budget=True)
-    eligible = profile in {"default", "isolated"} and validator is None
+    eligible = profile in {"default", "isolated", "browser"} and validator is None
     assert session_funded(selected) == eligible
     if eligible:
         assert selected["codex_contract"] == SESSION_CONTRACT

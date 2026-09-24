@@ -85,6 +85,17 @@ Missing usage remains unknown. Compaction has request/body bounds, not an output
 parameter unsupported by its protocol. Provider-hosted files, stored response references,
 background execution, remote tools and arbitrary upstream routing are not supported.
 
+When a stop happens, the attempt names its cause. The relay records budget, request and
+token stops. The controller's observed-token stop is recorded as `token_limit` from its
+own usage frame. The relay logs each rejection with run, operation, status and reason
+code, and only the status of an upstream rejection. It never logs request or provider
+bodies. The controller also prints each agent narration line (not the structured result)
+as a bounded `TIN_CODEX_PROGRESS` frame. The switchboard redacts run secrets and projects
+the latest line to the run's `progress_summary` in Postgres, unless product code owns the
+run's progress steps. It never enters Temporal. Payment-card runs skip it, as they skip
+rollout capture. After a failure it shows as the last update before the stop. Images
+built before this frame existed simply report no narration.
+
 Historical default-profile procedures selected **`tin-codex-api-v3`**: 64 requests, 1 MiB request
 bodies, 8,192 output tokens per response, 128,000 configured context tokens, automatic
 compaction at 96,000, and a stop after 2,000,000 observed cumulative tokens. Both server
@@ -96,7 +107,7 @@ search, open pages and follow up within one response. Already admitted v1/v2 run
 retain their one-call ceiling. Run timeouts and credit reservations still apply;
 this is not unlimited customer liability or unlimited supplier spending protection.
 
-New, customer-funded ordinary procedures (`default` and `isolated`) pin
+New, customer-funded ordinary procedures (`default`, `isolated` and `browser`) pin
 **`tin-codex-api-v4`** and `funding=procedure_session_v1`. Their Responses requests use
 GPT-6 Sol's supported 128,000 output-token maximum and 1,050,000-token context. The
 controller compacts at 922,000 context tokens, leaving room for one maximum response.
@@ -104,6 +115,10 @@ An explicit smaller output limit remains valid. Output tokens include reasoning;
 are per-response/context limits, not a cumulative session allowance. Requests remain
 bounded to 8 MiB; artifact, tool, sandbox isolation and timeout contracts still apply.
 There is no separate 64-request or lifetime-token stop for these sessions.
+Browser procedures joined on 2026-09-24: a signup walkthrough spends one model turn per
+page action, and the 64-request v3 ceiling stopped complete walkthroughs before they
+wrote a report. Their open-egress `browser_api` image and 1800-second timeout are
+unchanged; runs admitted earlier keep v3.
 [Model limits](https://developers.openai.com/api/docs/models/gpt-6-sol).
 
 Every contract named `gpt-6-astra` until 2026-09-23. Runs admitted before then keep
@@ -128,7 +143,7 @@ requires an explicit provider/operating policy, not an invented precise token es
 
 Only newly admitted ordinary root procedures select v4. Existing budgets and valid
 quotes retain their auth, model, price and runtime pins. Included onboarding and its
-children, other parent children, browser/Studio, diagrams/video, design tasks, interactive
+children, other parent children, Studio, diagrams/video, design tasks, interactive
 tasks and managed model steps keep their existing contracts. No data migration or
 Temporal command change is required. Before deploying the switchboard, build and verify
 an isolated image with `codex_api_config.py --check-v4` and the opt-in `session_context`
