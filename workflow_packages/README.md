@@ -175,6 +175,10 @@ This private test is optional; it isn't the public registration process.
 A workflow a founder would want to run, rather than a summary of marketing advice. Say where
 the insight came from. If you ran it yourself, say what happened.
 
+Search the open pull requests before you start. Several contributors can reach the same idea,
+and a workflow nobody has written is worth more than a second version of one already in review.
+If yours overlaps an open one, say how it differs.
+
 ## What happens next
 
 A maintainer reviews the implementation, inputs, outputs, tests, cost bounds and permissions.

@@ -36,9 +36,11 @@ cross-cutting implementation safeguards, not historical deployment logs.
     `skills/<name>/SKILL.md`. The contract still bounds inputs, workspace, integrations
     and output, which is a project artifact or an unmerged GitHub PR.
 - Packages live in `workflow_packages/<key>/` with the same key in the manifest, and ship
-  offline fixture tests that include a plausible but unusable model result. Check with
-  `uv run tin-lite validate-community`. Copy from `example.csv_summary` and
-  `example.feedback_digest`; `example.*` and `custom.*` keys are reserved.
+  offline fixture tests that include a plausible but unusable model result. A procedure
+  without model routes shows the same for a provider response or input instead, such as a
+  truncated read or a missing selection. Check with `uv run tin-lite validate-community`.
+  Copy from `example.csv_summary` and `example.feedback_digest`; `example.*` and
+  `custom.*` keys are reserved.
 - Respect the package boundary: no `pip`, raw credentials or direct network access, and
   bounded runtime and model calls; see [code execution](docs/code-workflows.md) and
   [model steps](docs/code-model-workflows.md). Longer durable orchestration is a native
