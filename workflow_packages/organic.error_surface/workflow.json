@@ -1,0 +1,129 @@
+{
+  "package_format": "tin-workflow-package-v1",
+  "definition": {
+    "key": "organic.error_surface",
+    "title": "Find the errors your users search for",
+    "description": "Find the searches your own users make when your product fails. Read the connected repository for the error messages it actually shows people, check which your docs already answer, and get a ranked set of pages to write, with the queries nobody can win and why.",
+    "version": "1.0.0",
+    "executor": "codex.procedure",
+    "schedule_modes": [
+      "on_demand",
+      "weekly"
+    ],
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "project_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "focus": {
+          "type": "string",
+          "maxLength": 500,
+          "default": "",
+          "title": "Focus",
+          "description": "A module, package, or surface to read first, such as the public API client or the CLI. Leave empty to read the user-facing surfaces evenly.",
+          "x-tin-ui": {
+            "control": "text",
+            "order": 10
+          }
+        },
+        "depth": {
+          "type": "string",
+          "enum": [
+            "focused",
+            "standard",
+            "extensive"
+          ],
+          "default": "standard",
+          "title": "Depth",
+          "description": "How much of the repository to read before ranking.",
+          "x-tin-ui": {
+            "control": "select",
+            "order": 20
+          }
+        },
+        "self_hosted": {
+          "type": "boolean",
+          "default": false,
+          "title": "Do people run this product themselves?",
+          "description": "Turn this on for open-source or self-hosted products, where setup and configuration errors reach real users rather than only your own team.",
+          "x-tin-ui": {
+            "control": "segmented",
+            "order": 25
+          }
+        },
+        "max_opportunities": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 40,
+          "default": 15,
+          "title": "Ranked opportunities",
+          "description": "How many page-worthy errors to carry into the ranked table.",
+          "x-tin-ui": {
+            "control": "counter",
+            "order": 30
+          }
+        },
+        "docs_paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "maxItems": 8,
+          "uniqueItems": true,
+          "default": [],
+          "title": "Optional docs locations",
+          "description": "Repository directories that hold public documentation, such as docs or content/help. Leave empty to discover them."
+        }
+      },
+      "required": [
+        "project_id"
+      ]
+    },
+    "integration_requirements": [
+      {
+        "provider_key": "infra.github",
+        "capabilities": [
+          "contents.read"
+        ],
+        "required": true
+      }
+    ],
+    "procedure": {
+      "prompt_path": "PROMPT.md",
+      "skills_path": "skills",
+      "skill_files": [
+        "skills/error-surface/SKILL.md",
+        "skills/error-surface/EXTRACTION.md",
+        "skills/error-surface/RANKING.md"
+      ],
+      "entry_skill": "error-surface",
+      "workspace": {
+        "kind": "github.repository",
+        "provider_key": "infra.github",
+        "capabilities": [
+          "contents.read"
+        ],
+        "limits": {
+          "max_files": 1000,
+          "max_bytes": 100000000
+        }
+      },
+      "sandbox": {
+        "profile": "isolated",
+        "egress": "fenced",
+        "timeout_seconds": 1800
+      },
+      "output": {
+        "kind": "project.artifact",
+        "media_type": "text/markdown",
+        "max_bytes": 200000,
+        "path_template": "reports/error-surface/{run_id}.md"
+      }
+    },
+    "system": "organic-traffic"
+  }
+}
