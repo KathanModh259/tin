@@ -5,7 +5,7 @@
     "title": "Find the talks and podcasts worth pitching",
     "description": "Find conferences, meetups and podcasts currently accepting speakers or guests that fit a specific expertise or story, verify each one's deadline and submission requirements, and draft one tailored pitch per venue for a human to review and send.",
     "executor": "codex.procedure",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "schedule_modes": ["on_demand"],
     "input_schema": {
       "type": "object",

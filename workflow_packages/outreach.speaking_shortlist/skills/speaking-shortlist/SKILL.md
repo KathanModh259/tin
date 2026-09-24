@@ -44,8 +44,15 @@ applies, submits, emails, or otherwise acts toward any venue on its own.
    metrics or availability.
 
 7. Write the report to the declared path. Start with one line, `Status: complete` if at least
-   one venue survived verification, otherwise `Status: no venues verified`. Then one section per
-   venue, in ranked order, each with these exact labels so the result stays checkable:
+   one venue survived verification, otherwise `Status: no venues verified`. Then one line,
+   `Verdict:`, set by counting the venues that survived step 3 — this is a count, not a judgment
+   call:
+   - `Verdict: fit` if 3 or more venues survived
+   - `Verdict: thin` if 1 or 2 venues survived
+   - `Verdict: not a fit` if none survived
+
+   Then one section per venue, in ranked order, each with these exact labels so the result stays
+   checkable:
    - `## <Venue name>` with its link
    - `Deadline:` the exact date (and timezone if stated) and its source, or
      `Rolling — verified open on <date checked>` with its source for a rolling venue

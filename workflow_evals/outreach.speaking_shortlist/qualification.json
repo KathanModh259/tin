@@ -28,6 +28,7 @@
       "expect": {
         "contains": [
           "Status:",
+          "Verdict:",
           "Deadline:",
           "Fit:",
           "Requirements:",
@@ -53,6 +54,7 @@
       "expect": {
         "contains": [
           "Status:",
+          "Verdict:",
           "Deadline:",
           "## Excluded candidates"
         ]
@@ -72,6 +74,7 @@
       "expect": {
         "contains": [
           "Status:",
+          "Verdict:",
           "## Excluded candidates"
         ],
         "excludes": [
@@ -93,7 +96,11 @@
       "expect": {
         "contains": [
           "Status:",
+          "Verdict:",
           "## Excluded candidates"
+        ],
+        "excludes": [
+          "Verdict: fit"
         ]
       }
     },
@@ -111,6 +118,7 @@
       "expect": {
         "contains": [
           "Status:",
+          "Verdict:",
           "## Excluded candidates"
         ]
       }
@@ -140,6 +148,10 @@
     {
       "id": "restraint",
       "question": "Are already_pitched venues and the wrong format correctly excluded, is the ranked list capped at max_venues, and does the report disclose honestly when fewer venues survive verification instead of padding the list?"
+    },
+    {
+      "id": "verdict_accuracy",
+      "question": "Does the Verdict line match a plain count of venues that survived verification (fit at 3+, thin at 1-2, not a fit at 0), rather than a subjective read on how strong the matches are?"
     },
     {
       "id": "scope",
