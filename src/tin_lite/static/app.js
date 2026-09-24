@@ -91,7 +91,19 @@ function goToRoute(route) {
   routeChanged();
 }
 normalizeDashboardUrl();
-const RESOURCE_SCOPED_INTEGRATIONS = new Set(["analytics.gsc", "infra.github"]);
+const RESOURCE_SCOPED_INTEGRATIONS = new Set(["analytics.gsc", "infra.github", "analytics.posthog"]);
+
+// The one resource a scoped connection uses in this project, or null while unchosen.
+function integrationSelection(integration) {
+  const config = integration?.configuration || {};
+  return config.selected_site_url || config.selected_repository || config.selected_project_id || null;
+}
+
+function integrationResourceNoun(providerKey) {
+  if (providerKey === "infra.github") return "repository";
+  if (providerKey === "analytics.posthog") return "PostHog project";
+  return "Search Console property";
+}
 // Rendered as the last available row; saving creates a real custom.api.<name> connection.
 const CUSTOM_API_TEMPLATE = Object.freeze({
   key: "custom.api",
@@ -103,7 +115,7 @@ const CUSTOM_API_TEMPLATE = Object.freeze({
   status: "available",
 });
 const CONNECT_REQUEST_KEY = "tin-lite:connect-providers";
-const CONNECT_PROVIDERS = new Set(["infra.github", "analytics.gsc", "workspace.google", "ads.google"]);
+const CONNECT_PROVIDERS = new Set(["infra.github", "analytics.gsc", "workspace.google", "ads.google", "payments.stripe", "analytics.posthog"]);
 let pendingConnectRequest = null;
 
 function rememberConnectRequest(projectId, providers) {
@@ -251,6 +263,7 @@ const state = {
   integrationConnectIntent: null,
   githubInstallationChoice: null,
   repositoryChoice: null,
+  stripeKeyChoice: null,
   projectCreateWorkspaceId: null,
   projectCreateRequestId: null,
   projectCreatePersonal: false,
@@ -896,8 +909,7 @@ function workflowRequirementState(workflow) {
     );
     const configured = Boolean(integration?.connection_id) && integration.status === "connected";
     const capable = (requirement.capabilities || []).every((capability) => granted.has(capability));
-    const selected = integration?.configuration?.selected_site_url ||
-      integration?.configuration?.selected_repository;
+    const selected = integrationSelection(integration);
     const resourceReady = !RESOURCE_SCOPED_INTEGRATIONS.has(requirement.provider_key) || Boolean(selected);
     return { requirement, integration, ready: configured && capable && resourceReady };
   });
@@ -5447,8 +5459,7 @@ function renderConnectRequest(requested) {
     .map((key) => state.integrations.find((integration) => integration.key === key))
     .filter(Boolean);
   const done = items.filter((integration) => integration.connection_id && integration.status === "connected" &&
-    (!RESOURCE_SCOPED_INTEGRATIONS.has(integration.key) ||
-      integration.configuration?.selected_repository || integration.configuration?.selected_site_url));
+    (!RESOURCE_SCOPED_INTEGRATIONS.has(integration.key) || integrationSelection(integration)));
   const projectName = escapeHtml(state.project?.name || "your project");
   main.innerHTML = `<section class="product-view integrations-view connect-view">
     <header class="workspace-header">
@@ -5493,6 +5504,9 @@ function bindIntegrationCardControls() {
   });
   document.querySelectorAll("[data-integration-refresh]").forEach((button) => {
     button.addEventListener("click", () => refreshGoogleAds(button));
+  });
+  document.querySelectorAll("[data-stripe-refresh]").forEach((button) => {
+    button.addEventListener("click", () => refreshStripe(button));
   });
   document.querySelectorAll("[data-integration-form]").forEach((form) => {
     bindTinControls(form);
@@ -5576,25 +5590,31 @@ function renderIntegrations() {
 function renderIntegrationCard(integration) {
   const expanded = state.expandedIntegration === integration.key;
   const connected = Boolean(integration.connection_id);
-  const selected = integration.configuration?.selected_site_url ||
-    integration.configuration?.selected_repository || null;
+  const selected = integrationSelection(integration);
   const needsResource = connected && RESOURCE_SCOPED_INTEGRATIONS.has(integration.key) && !selected;
   const logoPaths = {
     "analytics.gsc": "/assets/integrations/google-search-console.svg",
     "infra.github": "/assets/integrations/github.svg",
     "workspace.google": "/assets/integrations/google-workspace.svg",
     "ads.google": "/assets/integrations/google-ads.svg",
+    "payments.stripe": "/assets/integrations/stripe.svg",
+    "analytics.posthog": "/assets/integrations/posthog.svg",
   };
   const logo = logoPaths[integration.key]
     ? `<img src="${logoPaths[integration.key]}" alt="" />`
     : escapeHtml(integration.badge);
   const primary = needsResource
-    ? integration.key === "infra.github" ? "Choose a repository" : "Choose a Search property"
-    : selected || integration.external_account_label || "Choose an account";
+    ? integration.key === "infra.github" ? "Choose a repository"
+      : integration.key === "analytics.posthog" ? "Choose a PostHog project" : "Choose a Search property"
+    : integration.key === "analytics.posthog"
+      ? integration.external_account_label || "PostHog"
+      : selected || integration.external_account_label || "Choose an account";
   const health = integration.key.startsWith("custom.api.")
     ? integration.configuration?.access_verified ? "access verified" : "saved · not verified"
     : integration.key === "ads.google" && connected
     ? googleAdsHealth(integration)
+    : integration.key === "payments.stripe" && connected
+    ? stripeHealth(integration)
     : needsResource
     ? "setup required"
     : integration.status === "needs_attention"
@@ -5605,7 +5625,7 @@ function renderIntegrationCard(integration) {
   const unlocks = (integration.unlocks || []).join(" · ");
   return `<article class="integration-card ${connected ? "is-connected" : "is-available"} ${needsResource ? "is-needs-setup" : ""} ${expanded ? "is-expanded" : ""}">
     <div class="integration-card-row">
-      <span class="integration-badge ${integration.key === "infra.github" ? "is-monochrome" : ""}" aria-hidden="true">${logo}</span>
+      <span class="integration-badge ${["infra.github", "payments.stripe", "analytics.posthog"].includes(integration.key) ? "is-monochrome" : ""}" aria-hidden="true">${logo}</span>
       <span class="integration-identity">
         <strong class="integration-name">${escapeHtml(integration.name)}</strong>
         <code class="integration-key">${escapeHtml(integration.key)}</code>
@@ -5633,19 +5653,72 @@ function googleAdsHealth(integration) {
   return "ready for workflows";
 }
 
+function stripeHealth(integration) {
+  const config = integration.configuration || {};
+  if (integration.status === "needs_attention") return "Stripe rejected the key · enter a new one";
+  const mode = config.livemode ? "" : "test mode · ";
+  if ((config.missing_permissions || []).length) return `${mode}some reads not allowed`;
+  return `${mode}ready for workflows`;
+}
+
+const STRIPE_READS = {
+  "subscriptions.read": "subscriptions",
+  "customers.read": "customers",
+  "invoices.read": "invoices",
+  "prices.read": "prices",
+  "charges.read": "charges",
+};
+
+function renderStripeExpanded(integration) {
+  const config = integration.configuration || {};
+  const granted = (config.granted_capabilities || []).map((item) => STRIPE_READS[item] || item);
+  const missing = config.missing_permissions || [];
+  const checkedLabel = integration.last_checked_at ? `checked ${timeLabel(integration.last_checked_at)}` : "not checked yet";
+  const prompt = integration.status === "needs_attention"
+    ? `<p class="integration-setup-prompt" role="status"><strong>Stripe rejected the stored key.</strong> It may have been deleted or expired. Enter a new restricted key.</p>`
+    : missing.length
+      ? `<p class="integration-setup-prompt" role="status">The key cannot read ${escapeHtml(missing.join(", "))}. Give it Read access to them in Stripe (Developers, API keys, edit the Tin key), then check again.</p>`
+      : "";
+  return `<div class="integration-expanded">
+    ${prompt}
+    <div class="integration-detail-row"><span class="integration-detail-label">Account</span><span class="integration-detail-value">${escapeHtml(integration.external_account_label || "Stripe")}</span></div>
+    <div class="integration-detail-row"><span class="integration-detail-label">Mode</span><span class="integration-detail-value">${config.livemode ? "Live data" : "Test mode · sandbox data only"}</span></div>
+    <div class="integration-detail-row">
+      <span class="integration-detail-label">Access</span>
+      <span class="integration-detail-value" title="Tin stores the restricted key encrypted and only ever reads with it. Workflows receive projected records, never the key. Full customer email addresses and names are included in customer records.">read only · ${escapeHtml(granted.join(", ") || "nothing yet")}</span>
+    </div>
+    <div class="integration-detail-row">
+      <span class="integration-detail-label">Unlocks</span>
+      <span class="integration-detail-value is-muted">${escapeHtml((integration.unlocks || []).join(" · "))}</span>
+    </div>
+    <div class="integration-control-footer">
+      <span>connected ${escapeHtml(integration.connected_at ? timeLabel(integration.connected_at) : "recently")} · via restricted key · ${escapeHtml(checkedLabel)}</span>
+      <button class="integration-reconnect" type="button" data-stripe-refresh>Check again</button>
+      <button class="integration-reconnect" type="button" data-integration-connect="payments.stripe">Replace key</button>
+      <button class="integration-disconnect" type="button" data-integration-disconnect="payments.stripe">Disconnect</button>
+      <button class="integration-done" type="button" data-integration-expand="payments.stripe">Done</button>
+    </div>
+  </div>`;
+}
+
 function renderIntegrationExpanded(integration) {
+  if (integration.key === "payments.stripe") return renderStripeExpanded(integration);
   const options = state.integrationOptions.get(integration.key);
-  const selected = integration.configuration?.selected_site_url ||
-    integration.configuration?.selected_repository || "";
-  const optionLabel = integration.key === "infra.github" ? "Repository" : "Search property";
+  const selected = integrationSelection(integration) || "";
+  const isPostHog = integration.key === "analytics.posthog";
+  const optionLabel = integration.key === "infra.github" ? "Repository" : isPostHog ? "PostHog project" : "Search property";
   const isWorkspace = integration.key === "workspace.google";
   const isAds = integration.key === "ads.google";
   const setupPrompt = RESOURCE_SCOPED_INTEGRATIONS.has(integration.key) && !selected
-    ? `<p class="integration-setup-prompt" role="status"><strong>Finish setup.</strong> OAuth is connected, but workflows cannot use ${escapeHtml(integration.name)} until you choose ${integration.key === "infra.github" ? "a repository" : "a Search Console property"} for ${escapeHtml(state.project.name)}.</p>`
-    : "";
+    ? `<p class="integration-setup-prompt" role="status"><strong>Finish setup.</strong> OAuth is connected, but workflows cannot use ${escapeHtml(integration.name)} until you choose a ${escapeHtml(integrationResourceNoun(integration.key))} for ${escapeHtml(state.project.name)}.</p>`
+    : integration.status === "needs_attention" && isPostHog
+      ? `<p class="integration-setup-prompt" role="status"><strong>PostHog needs reconnecting.</strong> It no longer accepts Tin's access. Reconnect to keep reading ${escapeHtml(integration.external_account_label || "the project")}.</p>`
+      : "";
   const workspaceCanSend = (integration.configuration?.granted_capabilities || []).includes("gmail.messages.send");
   const accessValue = integration.key === "infra.github"
     ? "selected repositories · Contents + Pull requests write"
+    : isPostHog
+      ? `read only · ${(integration.configuration?.granted_capabilities || []).map((item) => item.replace(".read", "")).join(", ") || "nothing yet"} · ${String(integration.configuration?.region || "").toUpperCase()} Cloud`
     : isAds
       ? "one linked account · campaign read + write via Tin's manager account"
     : isWorkspace
@@ -5655,6 +5728,8 @@ function renderIntegrationExpanded(integration) {
       : "read only · search performance + indexing signals";
   const accessCopy = integration.key === "infra.github"
     ? "By installing the Tin GitHub App, you opt in to Contents and Pull requests write access for only the repositories granted in GitHub. Tin uses short-lived installation tokens; it never stores a personal access token."
+    : isPostHog
+      ? "Tin stores encrypted PostHog OAuth tokens with read scopes only and reads the one project chosen here. Workflows receive small projected records and bounded query results, never the tokens. HogQL reads must be one SELECT with a LIMIT of at most 1000."
     : isAds
       ? "Tin's manager account is linked to your Google Ads account by an invitation you accept inside Google Ads. Tin stores no Google credential of yours. Every campaign change waits for your approval; removing the manager in Google Ads ends Tin's access at once."
     : isWorkspace
@@ -5732,7 +5807,7 @@ async function toggleIntegration(providerKey) {
   state.expandedIntegration = providerKey;
   const integration = state.integrations.find((item) => item.key === providerKey);
   const context = currentProjectContext();
-  if (integration?.connection_id && providerKey !== "workspace.google" && providerKey !== "ads.google" && !state.integrationOptions.has(providerKey)) {
+  if (integration?.connection_id && !["workspace.google", "ads.google", "payments.stripe"].includes(providerKey) && !state.integrationOptions.has(providerKey)) {
     state.integrationLoading = providerKey;
     renderIntegrations();
     try {
@@ -5767,8 +5842,7 @@ async function openCustomApi(connection = null) {
 async function promptForIntegrationResource(providerKey) {
   if (!RESOURCE_SCOPED_INTEGRATIONS.has(providerKey)) return;
   const integration = state.integrations.find((item) => item.key === providerKey);
-  const selected = integration?.configuration?.selected_site_url ||
-    integration?.configuration?.selected_repository;
+  const selected = integrationSelection(integration);
   if (!integration?.connection_id || selected) return;
   if (providerKey === "infra.github") {
     await chooseGitHubRepository();
@@ -5779,8 +5853,7 @@ async function promptForIntegrationResource(providerKey) {
   if (!form) return;
   form.scrollIntoView({ block: "center", behavior: "smooth" });
   form.querySelector("[data-tin-select-trigger]")?.focus({ preventScroll: true });
-  const resource = providerKey === "infra.github" ? "repository" : "Search Console property";
-  showToast(`Choose a ${resource} to finish connecting ${integration.name}.`);
+  showToast(`Choose a ${integrationResourceNoun(providerKey)} to finish connecting ${integration.name}.`);
 }
 
 function renderIntegrationProjectOptions({ focusProjectId = null } = {}) {
@@ -5815,7 +5888,9 @@ function chooseIntegrationProject(providerKey, capabilities) {
   };
   const nextStep = providerKey === "infra.github"
     ? "After GitHub authorizes Tin, you’ll choose the repository this project can use."
-    : "After Google authorizes Tin, you’ll choose the Search Console property this project can use.";
+    : providerKey === "analytics.posthog"
+      ? "PostHog then asks which one of your PostHog projects Tin may read."
+      : "After Google authorizes Tin, you’ll choose the Search Console property this project can use.";
   integrationProjectTitle.textContent = `Connect ${integration.name} to a project`;
   integrationProjectCopy.textContent = `Connections are project-owned. Choose the Tin project for this connection. ${nextStep}`;
   integrationProjectForm.querySelector("[data-confirm-integration-project]").textContent = `Continue to ${integration.name}`;
@@ -5836,6 +5911,10 @@ async function connectIntegration(providerKey, capabilities = null, targetProjec
   }
   if (providerKey === "ads.google") {
     chooseGoogleAdsAccount(targetProjectId || currentProjectContext().projectId);
+    return;
+  }
+  if (providerKey === "payments.stripe") {
+    chooseStripeKey(targetProjectId || currentProjectContext().projectId);
     return;
   }
   if (
@@ -5905,7 +5984,9 @@ async function disconnectIntegration(providerKey) {
     const integrations = await api(`/api/projects/${encodeURIComponent(context.projectId)}/integrations`);
     if (!isCurrentProjectContext(context)) return;
     state.integrations = integrations;
-    showToast(`${integration.name} disconnected.`);
+    showToast(providerKey === "payments.stripe"
+      ? "Stripe disconnected. Also delete the Tin key in Stripe under Developers, API keys."
+      : `${integration.name} disconnected.`);
     renderIntegrations();
   } catch (error) {
     if (!isCurrentProjectContext(context)) return;
@@ -6288,16 +6369,17 @@ async function bootstrap(invitedProjectId = null, integrationReturn = null) {
 
 async function completeIntegrationCallback() {
   const path = window.location.pathname.replace(/\/$/, "");
-  if (!["/integrations/callback/google", "/integrations/callback/github"].includes(path)) return null;
+  if (!["/integrations/callback/google", "/integrations/callback/github", "/integrations/callback/posthog"].includes(path)) return null;
   const values = new URL(window.location.href).searchParams;
-  const provider = path.endsWith("/google") ? "google" : "github";
+  const provider = path.split("/").pop();
   const stateToken = values.get("state");
   let connected;
-  if (provider === "google") {
+  if (provider === "google" || provider === "posthog") {
     if (!stateToken) throw new Error("The integration connection did not return a valid state.");
     const code = values.get("code");
-    if (!code) throw new Error(values.get("error_description") || "Google connection was cancelled.");
-    connected = await api("/api/integrations/google/complete", {
+    const label = provider === "google" ? "Google" : "PostHog";
+    if (!code) throw new Error(values.get("error_description") || `${label} connection was cancelled.`);
+    connected = await api(`/api/integrations/${provider}/complete`, {
       method: "POST",
       body: JSON.stringify({ state: stateToken, code }),
     });
@@ -6530,6 +6612,86 @@ async function confirmGoogleAdsAccount() {
     showToast(`Could not link Google Ads: ${error.message}`);
     confirm.disabled = false;
     confirm.textContent = "Send invitation";
+  }
+}
+
+function chooseStripeKey(projectId) {
+  // Stripe connects by a restricted key the founder creates from Tin's link and pastes here.
+  // The value stays in this password field only; it is never kept in page state.
+  if (!projectId) return;
+  const existing = state.integrations.find((item) => item.key === "payments.stripe");
+  state.stripeKeyChoice = { projectId, expectedRevision: existing?.configuration?.revision || null };
+  integrationProjectTitle.textContent = `${existing?.connection_id ? "Replace the Stripe key for" : "Connect Stripe to"} ${state.project?.name || "this project"}`;
+  integrationProjectCopy.textContent =
+    "Create a restricted key in Stripe with read permissions only, then paste it here. Tin stores it encrypted and only reads with it; workflows never see it. Keys starting sk_ are refused.";
+  integrationProjectForm.querySelector("[data-confirm-integration-project]").textContent = "Save key";
+  integrationProjectOptions.replaceChildren();
+  const link = document.createElement("p");
+  link.className = "integration-setup-prompt";
+  const anchor = document.createElement("a");
+  anchor.href = existing?.setup_url || "https://dashboard.stripe.com/apikeys";
+  anchor.target = "_blank";
+  anchor.rel = "noopener noreferrer";
+  anchor.textContent = "Create the key in Stripe";
+  link.append(anchor, document.createTextNode(" with the read permissions already selected. Name it Tin, create it, and copy the rk_ value."));
+  const field = document.createElement("label");
+  field.className = "project-create-field";
+  field.innerHTML = `<span>Stripe restricted key</span><input type="password" name="restricted_key" autocomplete="off" spellcheck="false" placeholder="rk_live_…" maxlength="300" required />`;
+  integrationProjectOptions.append(link, field);
+  integrationProjectDialog.showModal();
+  field.querySelector("input").focus();
+}
+
+async function confirmStripeKey() {
+  const choice = state.stripeKeyChoice;
+  if (!choice) return;
+  const input = integrationProjectOptions.querySelector('input[name="restricted_key"]');
+  const key = (input?.value || "").trim();
+  if (!/^rk_(live|test)_/.test(key)) {
+    showToast(/^(sk|pk)_/.test(key)
+      ? "That is a secret or publishable key. Paste a restricted key starting rk_live_ or rk_test_."
+      : "Paste a Stripe restricted key; it starts with rk_live_ or rk_test_.");
+    return;
+  }
+  const confirm = integrationProjectForm.querySelector("[data-confirm-integration-project]");
+  confirm.disabled = true;
+  confirm.textContent = "Checking…";
+  try {
+    const updated = await api(`/api/projects/${encodeURIComponent(choice.projectId)}/integrations/payments.stripe/key`, {
+      method: "POST",
+      body: JSON.stringify({ restricted_key: key, expected_revision: choice.expectedRevision }),
+    });
+    if (input) input.value = "";
+    if (state.project?.id === choice.projectId) {
+      const index = state.integrations.findIndex((item) => item.key === "payments.stripe");
+      if (index >= 0) state.integrations[index] = updated;
+      else state.integrations.push(updated);
+    }
+    if (integrationProjectDialog.open) integrationProjectDialog.close();
+    showToast(`Stripe connected: ${stripeHealth(updated)}.`);
+    if (state.view === "integrations") renderIntegrations();
+  } catch (error) {
+    showToast(`Could not connect Stripe: ${error.message}`);
+    confirm.disabled = false;
+    confirm.textContent = "Save key";
+  }
+}
+
+async function refreshStripe(button) {
+  const context = currentProjectContext();
+  if (!context.projectId) return;
+  button.disabled = true;
+  try {
+    const updated = await api(`/api/projects/${encodeURIComponent(context.projectId)}/integrations/payments.stripe/refresh`, { method: "POST" });
+    if (!isCurrentProjectContext(context)) return;
+    const index = state.integrations.findIndex((item) => item.key === "payments.stripe");
+    if (index >= 0) state.integrations[index] = updated;
+    showToast(`Stripe: ${stripeHealth(updated)}.`);
+    renderIntegrations();
+  } catch (error) {
+    if (!isCurrentProjectContext(context)) return;
+    button.disabled = false;
+    showToast(`Could not check Stripe: ${error.message}`);
   }
 }
 
@@ -6968,6 +7130,10 @@ integrationProjectForm.addEventListener("submit", async (event) => {
     await confirmGoogleAdsAccount();
     return;
   }
+  if (state.stripeKeyChoice) {
+    await confirmStripeKey();
+    return;
+  }
   const intent = state.integrationConnectIntent;
   if (!intent) return;
   const confirm = integrationProjectForm.querySelector("[data-confirm-integration-project]");
@@ -6990,6 +7156,9 @@ integrationProjectDialog.addEventListener("close", () => {
   state.githubInstallationChoice = null;
   state.repositoryChoice = null;
   state.googleAdsChoice = null;
+  state.stripeKeyChoice = null;
+  const stripeKey = integrationProjectOptions.querySelector('input[name="restricted_key"]');
+  if (stripeKey) stripeKey.value = "";
   integrationProjectForm.querySelector("[data-confirm-integration-project]").disabled = false;
 });
 

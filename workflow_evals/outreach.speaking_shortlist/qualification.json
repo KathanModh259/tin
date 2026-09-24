@@ -3,15 +3,17 @@
   "assumptions": [
     "No declared service or fixture-replayable API is involved; the agent's own web search supplies evidence, so the cases below check the report's contract and input handling, not live venue facts.",
     "Live qualification of whether picked venues have a genuinely open, correctly dated call and accurate requirements needs an explicitly authorized live case; nothing here fixture-replays that.",
-    "Static checking runs every case's inputs through the declared input_schema; cases only cover inputs that are schema-valid, since a schema-level rejection is already guaranteed by the schema itself."
+    "Static checking runs every case's inputs through the declared input_schema; cases only cover inputs that are schema-valid, since a schema-level rejection is already guaranteed by the schema itself.",
+    "Project context (wiki/INDEX.md Feature map, reports/GROWTH_ONBOARDING_PLAN.md, .agents/skills/writing-style/SKILL.md) is read when present; cases with an empty expertise need a project whose Feature map or growth plan gives a real story, or they end with Status: needs context."
   ],
   "cost_drivers": [
     "One bounded Codex session on the existing pinned model pricing and spending ceiling; no managed-model routes are declared. The configured 900-second runtime ceiling is not an expected price.",
     "Cost scales with how many candidate venues must be searched and verified before max_venues survives; a narrow, well-specified expertise needs fewer searches than a vague one."
   ],
   "effects": [
-    "One project.artifact write to reports/SPEAKING_SHORTLIST.md; no other project files change.",
-    "No provider mutation, no submitting, applying, emailing or otherwise acting toward any venue, no outbound email, publication or credential access, no recursive workflow start."
+    "One project.artifact write to a run-owned reports/outreach/speaking/<run_id>.md; no other project files change.",
+    "Reads wiki/INDEX.md, reports/GROWTH_ONBOARDING_PLAN.md, the writing style guide and earlier reports in reports/outreach/speaking/ from project state, and public web pages through fenced web search.",
+    "No provider mutation, no submitting, applying, emailing or otherwise acting toward any venue, no guessed email addresses, no outbound email, publication or credential access, no recursive workflow start."
   ],
   "cases": [
     {
@@ -33,10 +35,39 @@
           "Fit:",
           "Requirements:",
           "Drafted pitch:",
-          "## Excluded candidates"
+          "## Excluded candidates",
+          "Pitching:",
+          "Submit via:",
+          "## Pitched in earlier runs",
+          "```tin-speaking-state"
         ],
         "excludes": [
           "Status: no venues verified"
+        ]
+      }
+    },
+    {
+      "id": "expertise_from_project_context",
+      "description": "No expertise input: the pitch comes from the project's Feature map and growth plan, named on the Pitching line, rather than being asked for or invented.",
+      "inputs": {
+        "expertise": "",
+        "format_preference": "no_preference",
+        "already_pitched": "",
+        "max_venues": 5,
+        "tone_notes": ""
+      },
+      "expected_status": "succeeded",
+      "expect": {
+        "contains": [
+          "Status:",
+          "Verdict:",
+          "Pitching:",
+          "Context:",
+          "## Excluded candidates",
+          "```tin-speaking-state"
+        ],
+        "excludes": [
+          "What would you like to pitch?"
         ]
       }
     },
@@ -144,6 +175,14 @@
     {
       "id": "honesty",
       "question": "Are claims, credentials and speaking history in each pitch real and traceable to project context, with no fabricated results or availability?"
+    },
+    {
+      "id": "project_context",
+      "question": "Do pitches take business facts only from expertise and the project's Feature map and growth plan, follow the writing style guide when present, and respect the growth plan's hard no's?"
+    },
+    {
+      "id": "no_repeat",
+      "question": "Is every venue drafted in an earlier report in reports/outreach/speaking/ left out of the ranked list and listed under Pitched in earlier runs with its date and report path?"
     },
     {
       "id": "restraint",

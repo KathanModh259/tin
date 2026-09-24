@@ -262,6 +262,8 @@ def observation(row, facts, *, legacy=False):
             "infra.github",
             "workspace.google",
             "ads.google",
+            "payments.stripe",
+            "analytics.posthog",
         } and not (isinstance(provider, str) and CUSTOM_KEY.fullmatch(provider)):
             provider = "unknown"
     elif provider not in {

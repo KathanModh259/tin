@@ -1,7 +1,9 @@
 # Project API connections
 
 Code workflows and bounded Codex procedures use the same project-owned connections and
-trusted service gateway. Existing definitions without procedure service bindings keep their
+trusted service gateway. For Stripe and PostHog, use the first-party `payments.stripe` and
+`analytics.posthog` connections instead of a custom API: see
+[Stripe and PostHog connections](stripe-and-posthog-connections.md). Existing definitions without procedure service bindings keep their
 behavior; one-off tasks, review rules and recorded Temporal commands are unchanged.
 Private execution remains restricted to the existing explicit pilot projects.
 
@@ -166,26 +168,19 @@ credential store or workflow engine is added. Apply it before deploying this cod
 ### PostHog example
 
 The [PostHog funnel package](../workflow_packages/example.posthog_funnel/workflow.json) shows
-this path without a named PostHog adapter. It is an unregistered authoring example; its real
-analytics quality and provider behavior still require a separately authorized evaluation.
-Copy its folder and key together to `custom.posthog_funnel` for an operator-enabled private
-trial, then validate and activate the exact revision through the ordinary package flow.
-
-Configure `custom.api.posthog` in Integrations with the correct regional API origin, bearer
-authentication, and GET/POST. Use a PostHog **personal API key** restricted to the intended
-project and the `query:read` and `event_definition:read` scopes, not the public ingestion key.
-Enter it only in secure setup. The package declares `http.write` because queries use POST;
-that permission describes
-HTTP methods, not proof that an operation changes provider data. PostHog's key permissions
-must enforce read-only access. Generic connections restrict origin and methods, not specific
-paths or project IDs. See [PostHog authentication](https://posthog.com/docs/api/personal-api-keys)
-and [query API](https://posthog.com/docs/api/query).
+a procedure calling registered operations through `call_service`. It binds the first-party
+`analytics.posthog` connection (OAuth, one founder-selected project) and uses
+`event_definitions.list`, `property_definitions.list` and `query.hogql`; the operations,
+HogQL rules and offline fakes are in [Stripe and PostHog connections](stripe-and-posthog-connections.md).
+It is an unregistered authoring example; its real analytics quality and provider behavior
+still require a separately authorized evaluation. Copy its folder and key together to
+`custom.posthog_funnel` for an operator-enabled private trial, then validate and activate the
+exact revision through the ordinary package flow.
 
 Tin's MCP tools expose its HTTP/API gateway to Codex. They do not connect arbitrary remote
-MCP servers. A later named connector or remote MCP adapter can reuse this boundary; neither
-is required for the custom API path. No live PostHog, paid model or E2B acceptance is implied
-by mocked tests. Codex model charges use existing pricing and settlement; connected-account
-charges remain separate and may be unknown.
+MCP servers. No live PostHog, paid model or E2B acceptance is implied by mocked tests. Codex
+model charges use existing pricing and settlement; connected-account charges remain separate
+and may be unknown.
 
 ## Existing adapters and contributions
 
@@ -199,6 +194,11 @@ project connections with this explicit reviewed mapping:
 | `infra.github` | `repositories.list` | `repositories.list` |
 | `workspace.google` | `gmail.messages.search`, `gmail.thread.read` | `gmail.messages.read` |
 | `workspace.google` | `calendar.events.list` | `calendar.events.read` |
+| `payments.stripe` | `subscriptions.list`, `customers.list`, `invoices.list`, `prices.list`, `charges.list` | `subscriptions.read`, `customers.read`, `invoices.read`, `prices.read`, `charges.read` |
+| `analytics.posthog` | `query.hogql`; `event_definitions.list`, `property_definitions.list`; `insights.list` | `query.read`; `definitions.read`; `insights.read` |
+
+Stripe and PostHog arguments, projected fields, paging and errors are documented in
+[Stripe and PostHog connections](stripe-and-posthog-connections.md).
 
 Adapter arguments are those of the bounded `IntegrationService` operation; project, run,
 account, connection and execution IDs are supplied by Tin. Email sends and GitHub delivery

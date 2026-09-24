@@ -88,7 +88,7 @@ class FakeIntegrationDatabase:
             attempt is None
             or attempt.provider_key != values["provider_key"]
             or attempt.clerk_user_id != values["clerk_user_id"]
-            or attempt.used_at is not None
+            or (attempt.used_at is not None and not values.get("include_used"))
         ):
             return None
         return attempt
@@ -173,6 +173,19 @@ class FakeIntegrationDatabase:
         )
         self.connections[(updated.project_id, updated.provider_key)] = updated
         return updated
+
+    async def update_integration_credential(self, **values) -> bool:
+        current = self.connections.get((values["project_id"], values["provider_key"]))
+        if current is None or current.id != values["connection_id"]:
+            return False
+        self.connections[(current.project_id, current.provider_key)] = IntegrationConnection(
+            **{
+                **current.__dict__,
+                "credential_ciphertext": values["credential_ciphertext"],
+                "credential_key_version": values["credential_key_version"],
+            }
+        )
+        return True
 
     async def mark_integration_attention(self, **values) -> None:
         current = self.connections[(values["project_id"], values["provider_key"])]

@@ -203,6 +203,10 @@ async def access_needs(
         relevant.add("analytics.gsc")
     if initial or keys & CONTENT_DRAFT_KEYS or inputs.get("system_repository"):
         relevant.add("infra.github")
+    if "stripe" in str(inputs.get("system_payments") or "").lower():
+        relevant.add("payments.stripe")
+    if "posthog" in str(inputs.get("system_analytics") or "").lower():
+        relevant.add("analytics.posthog")
     benefits = {
         "analytics.gsc": (
             "Use real search queries and impressions to prioritize research and audits.",
@@ -223,6 +227,17 @@ async def access_needs(
             "own Ads account.",
             "Ask for the ten-digit customer id; the founder accepts Tin's manager request "
             "inside Google Ads.",
+        ),
+        "payments.stripe": (
+            "Read subscriptions, customers and invoices to see who pays, who stays and who churns.",
+            "The founder creates a read-only restricted key from Tin's link and pastes it in "
+            "Tin's page, never in chat.",
+        ),
+        "analytics.posthog": (
+            "Read events, properties, insights and bounded HogQL results to see where "
+            "signups activate or drop.",
+            "The founder approves read access in PostHog and picks the one project for this "
+            "business.",
         ),
     }
     needs = []

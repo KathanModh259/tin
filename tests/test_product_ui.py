@@ -362,7 +362,7 @@ def test_product_ui_assets_are_packaged_beside_the_application() -> None:
     assert "api(`/api/projects/${projectId}/integrations`)" in script
     assert "No product integrations yet" not in script
     assert "data-integration-connect" in script
-    assert 'new Set(["analytics.gsc", "infra.github"])' in script
+    assert 'new Set(["analytics.gsc", "infra.github", "analytics.posthog"])' in script
     assert 'id="integration-project-dialog"' in index
     assert 'role="radiogroup"' in index
     assert "function chooseIntegrationProject(providerKey, capabilities)" in script

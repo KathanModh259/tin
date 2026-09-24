@@ -139,6 +139,16 @@ class Settings(BaseSettings):
     google_oauth_client_secret: SecretStr | None = Field(
         default=None, alias="TIN_LITE_GOOGLE_OAUTH_CLIENT_SECRET"
     )
+    # PostHog OAuth uses a Client ID Metadata Document Tin serves at a fixed path on
+    # TIN_LITE_PUBLIC_URL; PostHog fetches it, so there is no client secret to configure.
+    posthog_oauth_enabled: bool = Field(default=False, alias="TIN_LITE_POSTHOG_OAUTH_ENABLED")
+    # Optional phvt_ token from PostHog organization settings; it links the client to that
+    # organization. It is published in the metadata document, so it is not a secret.
+    posthog_oauth_verification_token: str | None = Field(
+        default=None,
+        alias="TIN_LITE_POSTHOG_OAUTH_VERIFICATION_TOKEN",
+        pattern=r"^phvt_[A-Za-z0-9_-]{8,200}$",
+    )
     github_app_slug: str | None = Field(default=None, alias="TIN_LITE_GITHUB_APP_SLUG")
     github_app_id: str | None = Field(default=None, alias="TIN_LITE_GITHUB_APP_ID")
     github_app_client_id: str | None = Field(default=None, alias="TIN_LITE_GITHUB_APP_CLIENT_ID")
@@ -322,6 +332,19 @@ class Settings(BaseSettings):
             raise ValueError(
                 "TIN_LITE_INTEGRATION_CREDENTIAL_KEY is required when Google OAuth is configured"
             )
+        if self.posthog_oauth_enabled:
+            from urllib.parse import urlsplit
+
+            public = urlsplit(self.switchboard_public_url)
+            if self.integration_credential_key is None:
+                raise ValueError(
+                    "TIN_LITE_INTEGRATION_CREDENTIAL_KEY is required when PostHog OAuth is enabled"
+                )
+            if public.scheme != "https" or public.hostname in {None, "localhost", "127.0.0.1"}:
+                raise ValueError(
+                    "TIN_LITE_POSTHOG_OAUTH_ENABLED requires an https TIN_LITE_PUBLIC_URL that "
+                    "PostHog can fetch the client metadata document from"
+                )
         ads_values = (self.google_ads_manager_customer_id, self.google_ads_manager_refresh_token)
         if any(value is not None for value in ads_values):
             if not all(value is not None for value in ads_values):

@@ -3,12 +3,35 @@
   "definition": {
     "key": "organic.error_surface",
     "title": "Find the errors your users search for",
-    "description": "Find the searches your own users make when your product fails. Read the connected repository for the error messages it actually shows people, check which your docs already answer, and get a ranked set of pages to write, with the queries nobody can win and why.",
-    "version": "1.0.0",
+    "description": "Read the connected repository for the error messages your product shows users, check which your docs already answer, and get a ranked list of pages to write with the cause and fix from the code, ready to add to Plan upcoming content as a context file. It never writes pages, opens pull requests or estimates search volume.",
+    "version": "1.1.0",
     "executor": "codex.procedure",
+    "system": "organic-traffic",
     "schedule_modes": [
       "on_demand",
       "weekly"
+    ],
+    "prerequisites": [
+      {
+        "kind": "artifact",
+        "level": "recommended",
+        "path": "wiki/INDEX.md",
+        "section": "### Code map",
+        "producer": "product.code_map",
+        "reason": "The Code map's user-facing surfaces tell the run which directories users reach, so reading starts there instead of guessing."
+      },
+      {
+        "kind": "run",
+        "level": "recommended",
+        "workflow": "organic.keyword_plan",
+        "reason": "When a ranked query or error code appears in the keyword plan, its observed demand is copied with the run id; otherwise demand is reported as unmeasured, never estimated."
+      },
+      {
+        "kind": "run",
+        "level": "recommended",
+        "workflow": "organic.audit",
+        "reason": "The audit's crawled page list names live pages that may already answer an error, which content.plan needs to choose between a new page and an update."
+      }
     ],
     "input_schema": {
       "type": "object",
@@ -57,10 +80,10 @@
         "max_opportunities": {
           "type": "integer",
           "minimum": 5,
-          "maximum": 40,
+          "maximum": 25,
           "default": 15,
           "title": "Ranked opportunities",
-          "description": "How many page-worthy errors to carry into the ranked table.",
+          "description": "How many page-worthy errors to carry into the ranked table. The report stays small enough to be a content.plan context file.",
           "x-tin-ui": {
             "control": "counter",
             "order": 30
@@ -120,10 +143,9 @@
       "output": {
         "kind": "project.artifact",
         "media_type": "text/markdown",
-        "max_bytes": 200000,
+        "max_bytes": 20000,
         "path_template": "reports/error-surface/{run_id}.md"
       }
-    },
-    "system": "organic-traffic"
+    }
   }
 }
