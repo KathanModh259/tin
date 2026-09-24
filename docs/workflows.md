@@ -70,3 +70,44 @@ Tin ships 32 built-in workflows. Every workflow also takes a `project_id`; requi
 | One-off project task (task)<br>`project.task` | Use an isolated Codex task when the founder asks Tin to inspect, research, or change project files and no narrower registered workflow fits. | **`instruction`**, **`title`** | — |
 | Research a question deeply<br>`research.deep_dive` | Test a project question and its upstream assumptions against current, source-backed evidence. | **`question`**, `depth`, `audience`, `known_assumptions`, `constraints` | `reports/RESEARCH_DEEP_DIVE.md` |
 | Create a diagram (human review)<br>`content.diagram` | Turn a process or system into one clear Tin-styled diagram whose Mermaid source stays editable in project Files. | **`brief`**, **`slug`**, `direction`, `context` | `diagrams/{slug}.mmd` |
+
+# Registry packages
+
+12 contributed packages from `workflow_packages/` are selected in `src/tin_lite/public_workflows.py` and published with the next catalog sync. [The package guide](../workflow_packages/README.md#how-the-packages-fit-together) shows how they build on the built-ins.
+
+## Organic traffic system
+
+| Workflow | What it does | Inputs | Output |
+|---|---|---|---|
+| Find the errors your users search for<br>`organic.error_surface` | Read the connected repository for the error messages your product shows users, check which your docs already answer, and get a ranked list of pages to write with the cause and fix from the code, ready to add to Plan upcoming content as a context file. It never writes pages, opens pull requests or estimates search volume. | `focus`, `depth`, `self_hosted`, `max_opportunities`, `docs_paths` | `reports/error-surface/{run_id}.md` |
+| Turn unlinked mentions into backlink asks<br>`organic.mention_backlinks` | Each week, find pages and AI-cited sources that name your product without linking to your site, and get one short ask per page in your voice, never repeating an ask from an earlier week. It never sends, posts or contacts anyone. | `brand_name`, `domain`, `aliases`, `max_mentions`, `recency_days` | `reports/backlink-asks/{run_id}.md` |
+
+## Cold outreach system
+
+| Workflow | What it does | Inputs | Output |
+|---|---|---|---|
+| Find who pays and stays<br>`outreach.paying_segment` | A founder with Stripe subscriptions learns which customers keep paying, and gets exact inputs for the outreach shortlist, keyword plan and ads assessment to aim at them. Read-only; no model calls, and it starts nothing itself. | `retention_days`, `lookback_days`, `min_segment_size`, `exclude_domains`, `product_summary` | `reports/outreach/PAYING_SEGMENT.md` |
+| Find the talks and podcasts worth pitching<br>`outreach.speaking_shortlist` | Finds conferences, meetups and podcasts with an open call that fit what your business can speak to, verifies each deadline and submission rule, and drafts one pitch per venue in your voice. Skips venues pitched in earlier runs; never submits or emails anything. | `expertise`, `format_preference`, `already_pitched`, `max_venues`, `tone_notes` | `reports/outreach/speaking/{run_id}.md` |
+| Get your product taught in the courses that pick students' tools<br>`outreach.syllabus_placement` | For a product students could learn on: finds public courses that teach its job, ranks them by when the instructor next picks tools, and drafts a teaching kit and one note per course in your voice. Skips courses earlier runs already listed; nothing is sent. | `teaching_job`, `alternatives`, `subjects`, `geography`, `education_offer`, `max_courses` | `reports/outreach/syllabus/{run_id}.md` |
+| Find campus events to reach student buyers<br>`outreach.campus_events` | For a business whose buyers are students: finds upcoming campus events near them, or compares ones you paste, ranks them and drafts one small activation to pitch. Research only; never contacts organizers, pays for a sponsorship or collects student data. | `event_briefs`, `audience`, `business`, `budget` | `reports/outreach/campus-events/{run_id}.md` |
+
+## Product QA system
+
+| Workflow | What it does | Inputs | Output |
+|---|---|---|---|
+| Product analytics brief<br>`product.analytics_brief` | A recurring PostHog brief: ordered activation, event trends, traffic, error signals and a supported breakdown, with reproducible evidence. | **`posthog_project_id`**, `reporting_days`, `as_of_utc`, `event_mapping`, `exclusions`, `website_hosts` | `reports/analytics/{run_id}.md` |
+| Check if a buyer would trust your checkout (human review)<br>`qa.buyer_trust` | Run before launch or after a signup walkthrough: get a fixed-rule PASS, FAIL or UNVERIFIED verdict on whether a careful buyer would trust your site and checkout, with ranked fixes handed to Improve site health or to you. Public GET requests only; it never signs in, submits forms, changes your site or claims CVE coverage. | **`product_url`**, `depth`, `notes` | `reports/BUYER_TRUST.md` |
+
+## Creative studio
+
+| Workflow | What it does | Inputs | Output |
+|---|---|---|---|
+| Draft an embeddable score quiz (human review)<br>`growth.score_quiz` | Draft a self-contained scored quiz widget to paste onto your own site: a few questions about the visitor's situation, an instant verdict and a call to action. A free interactive tool is a lead magnet, not another article or email. Draft only; Tin never deploys it, and the widget makes no network calls. | **`product_name`**, **`quiz_topic`**, `audience`, **`signup_url`**, `product_summary`, `voice_notes` | `reports/SCORE_QUIZ.md` |
+
+## General
+
+| Workflow | What it does | Inputs | Output |
+|---|---|---|---|
+| Watch competitors for pricing and product changes<br>`competitor.watch` | Each week Tin rereads your known competitors' public pricing and changelog pages and reports only material changes, with a suggested response. It never signs up, contacts anyone or changes your pricing. | `competitor_urls`, `max_competitors`, `watch_for`, `our_positioning` | `reports/competitor-watch/{run_id}.md` |
+| Get listed where your integrations' users already shop<br>`outreach.marketplace_listings` | Reads the integrations in your Code map, checks each partner's app marketplace for you and your competitors, tests its listing rules against your site, and names the one to three listings to submit this week with the form filled in, in your voice. Never repeats a listing an earlier run prepared, and never submits anything. | `product_url`, `max_picks`, `skip` | `reports/outreach/marketplaces/{run_id}.md` |
+| Announce a new release (human review)<br>`content.release_announce` | Turn a changelog or release notes into an X post, a LinkedIn post and a newsletter email for people who already follow the product, mentioning only what actually shipped. Drafts only: Tin never posts, sends or publishes them. | **`changelog`**, **`product_name`**, `release_url`, `audience`, `tone`, `voice_notes` | `reports/RELEASE_ANNOUNCE.md` |

@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from tin_lite.workflow_prerequisites import parse_workflow_prerequisites
+
 ROOT = Path(__file__).parents[1]
 PACKAGE = ROOT / "workflow_packages/outreach.syllabus_placement"
 SKILL = PACKAGE / "skills/syllabus-placement"
@@ -51,12 +53,38 @@ def test_manifest_declares_every_skill_file_and_matches_its_folder():
     assert definition["procedure"]["entry_skill"] == "syllabus-placement"
 
 
-def test_every_text_input_is_bounded():
+def test_every_text_input_is_bounded_and_optional():
     manifest = json.loads((PACKAGE / "workflow.json").read_text(encoding="utf-8"))
-    properties = manifest["definition"]["input_schema"]["properties"]
-    for name, field in properties.items():
+    schema = manifest["definition"]["input_schema"]
+    assert schema["required"] == ["project_id"]
+    for name, field in schema["properties"].items():
         if field["type"] == "string" and name != "project_id":
             assert field["maxLength"] <= 1000, name
+            assert field["default"] == "", name
+
+
+def test_manifest_reads_project_context_and_keeps_every_report():
+    definition = json.loads((PACKAGE / "workflow.json").read_text(encoding="utf-8"))["definition"]
+    assert definition["system"] == "cold-outreach"
+    output = definition["procedure"]["output"]
+    assert output["path_template"] == "reports/outreach/syllabus/{run_id}.md"
+    assert "path" not in output
+    assert definition["procedure"]["sandbox"]["egress"] == "fenced"
+    prerequisites = parse_workflow_prerequisites(
+        definition["prerequisites"], input_schema=definition["input_schema"]
+    )
+    assert {(p.path, p.producer, p.level) for p in prerequisites} == {
+        ("wiki/INDEX.md", "product.deep_dive", "recommended"),
+        ("reports/GROWTH_ONBOARDING_PLAN.md", "growth.onboarding_plan", "recommended"),
+        (".agents/skills/writing-style/SKILL.md", "style.capture", "recommended"),
+    }
+    skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    report = (SKILL / "REPORT.md").read_text(encoding="utf-8")
+    assert "tin-syllabus-state" in skill and "```tin-syllabus-state" in report
+    for label in ("Job searched:", "Context:", "## Already listed", "## Carried forward"):
+        assert label in report, label
+    # The email campaign contract needs addresses this workflow never guesses.
+    assert "outreach/email/SHORTLIST.csv" in skill
 
 
 @pytest.mark.parametrize(
@@ -176,6 +204,7 @@ def test_plan_sequences_this_week_before_later_dates(scoring):
         "hands_on": 5,
         "shortlisted": 4,
         "contact_now": 1,
+        "already_listed": 0,
     }
 
 
@@ -236,3 +265,115 @@ def test_a_record_missing_fields_is_rejected(scoring):
 def test_max_courses_is_bounded(scoring, limit):
     with pytest.raises(ValueError, match="max_courses"):
         scoring["plan"]([course()], AS_OF, limit)
+
+
+def test_a_course_listed_to_contact_is_not_listed_again_this_cycle(scoring):
+    open_now = course(next_start="2026-11-02")
+    first = scoring["plan"]([open_now], "2026-09-20", 5, previous=None, report_path="r/a.md")
+    assert [row["decision"] for row in first["shortlist"]] == ["contact_now"]
+    earlier = scoring["merge_states"](
+        [scoring["read_state"](json.loads(json.dumps(first["state"])))]
+    )
+    again = scoring["plan"](
+        [open_now, course("Other Lab", next_start="2026-11-02")],
+        AS_OF,
+        5,
+        previous=earlier,
+        report_path="r/b.md",
+    )
+    assert [row["course"] for row in again["shortlist"]] == ["Other Lab"]
+    assert [row["course"] for row in again["already_listed"]] == ["Survey Methods Lab"]
+    assert "2026-09-20 in r/a.md" in again["already_listed"][0]["reason"]
+    assert again["funnel"]["already_listed"] == 1
+    assert again["funnel"]["hands_on"] == 2
+    key = "example agricultural university|survey methods lab"
+    assert again["state"]["courses"][key]["report"] == "r/a.md"
+
+
+def test_the_next_yearly_cycle_may_be_contacted_again(scoring):
+    first = scoring["plan"]([course(next_start="2026-11-02")], "2026-09-20", 5, report_path="a")
+    next_year = scoring["plan"](
+        [course(next_start="2027-11-01")], "2027-09-20", 5, previous=first["state"]
+    )
+    assert [row["decision"] for row in next_year["shortlist"]] == ["contact_now"]
+
+
+def test_rerun_keeps_the_verdict_of_the_channel(scoring):
+    courses = [course(f"C{n}", next_start="2026-11-02") for n in range(3)]
+    first = scoring["plan"](courses, "2026-09-20", 5, report_path="a")
+    rerun = scoring["plan"](courses, AS_OF, 5, previous=first["state"])
+    assert rerun["shortlist"] == []
+    assert first["verdict"] == rerun["verdict"] == "fit"
+
+
+def test_scheduled_courses_not_found_again_are_carried_forward(scoring):
+    first = scoring["plan"](
+        [course(), course("Past", next_start="2026-10-01")], AS_OF, 5, report_path="a"
+    )
+    assert {row["decision"] for row in first["shortlist"]} == {"schedule", "next_cycle"}
+    later = scoring["plan"](
+        [course("New Lab", hands_on=False)], "2026-10-01", 5, previous=first["state"]
+    )
+    carried = {row["course"]: row["send_on"] for row in later["carried_forward"]}
+    assert carried == {"Survey Methods Lab": "2026-11-01", "Past": "2027-06-03"}
+    # Once a carried date passes, the course drops out of the calendar.
+    expired = scoring["plan"]([], "2026-11-02", 5, previous=first["state"])
+    assert [row["course"] for row in expired["carried_forward"]] == ["Past"]
+
+
+def test_a_hard_no_on_cold_email_withholds_the_notes(scoring):
+    allowed = scoring["plan"]([course(next_start="2026-11-02")], AS_OF, 5)
+    ruled = scoring["plan"]([course(next_start="2026-11-02")], AS_OF, 5, hard_nos=["no_cold_email"])
+    assert allowed["notes_allowed"] is True
+    assert ruled["notes_allowed"] is False
+    assert ruled["shortlist"] == allowed["shortlist"]
+    with pytest.raises(ValueError, match="hard no"):
+        scoring["plan"]([course()], AS_OF, 5, hard_nos=["no_courses"])
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        None,
+        {"version": 2, "courses": {}},
+        {"version": 1, "courses": []},
+        {"version": 1, "courses": {"k": "listed"}},
+        {
+            "version": 1,
+            "courses": {
+                "k": {
+                    "course": "C",
+                    "institution": "I",
+                    "report": "r",
+                    "decision": "discard",
+                    "listed_on": "2026-01-01",
+                }
+            },
+        },
+        {
+            "version": 1,
+            "courses": {
+                "k": {
+                    "course": "C",
+                    "institution": "I",
+                    "report": "r",
+                    "decision": "schedule",
+                    "listed_on": "last term",
+                }
+            },
+        },
+        {
+            "version": 1,
+            "courses": {
+                "k": {
+                    "course": "C",
+                    "institution": "I",
+                    "decision": "schedule",
+                    "listed_on": "2026-01-01",
+                }
+            },
+        },
+    ],
+)
+def test_untrusted_earlier_state_is_discarded(scoring, state):
+    assert scoring["read_state"](state) is None

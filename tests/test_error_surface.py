@@ -6,9 +6,17 @@ from pathlib import Path
 
 import pytest
 
+from tin_lite.workflow_inputs import normalize_workflow_inputs
+from tin_lite.workflow_prerequisites import parse_workflow_prerequisites
+from tin_lite.workflow_qualification import CASE_PROJECT, Qualification, assess_output
+
 ROOT = Path(__file__).parents[1]
 PACKAGE = ROOT / "workflow_packages/organic.error_surface"
 RESOURCES = PACKAGE / "skills/error-surface"
+FIXTURES = ROOT / "tests/fixtures/error_surface"
+CASES = ROOT / "workflow_evals/organic.error_surface/qualification.json"
+# content.plan reads a context file of at most this many bytes (content_plan_sources.py).
+CONTEXT_FILE_LIMIT = 20_000
 
 
 def resource(name):
@@ -262,6 +270,7 @@ def test_the_report_contract_matches_the_headings_the_skill_promises():
     skill = (RESOURCES / "SKILL.md").read_text(encoding="utf-8")
     for heading in (
         "## Ranked opportunities",
+        "## Page facts for content.plan",
         "## Below the cut",
         "## Already documented",
         "## Queries you cannot win",
@@ -276,4 +285,68 @@ def test_the_report_asks_for_a_page_and_not_only_a_finding():
     skill = (RESOURCES / "SKILL.md").read_text(encoding="utf-8")
     # The deliverable is a content shortlist; a table of code locations is not one.
     assert "suggested page" in skill.lower()
-    assert "content.plan" in skill and "content.draft" in skill
+    assert "content.plan" in skill and "content.generate" in skill
+    # content.draft is not a Tin workflow; the drafting built-in is content.generate.
+    assert "content.draft" not in skill
+    for line in ("Reader:", "Rows:", "Cause:", "Fix:", "Check first:"):
+        assert f"`{line}`" in skill, line
+
+
+def definition():
+    return json.loads((PACKAGE / "workflow.json").read_text(encoding="utf-8"))["definition"]
+
+
+def case(case_id):
+    contract = Qualification.model_validate(json.loads(CASES.read_text(encoding="utf-8")))
+    return next(item for item in contract.cases if item.id == case_id)
+
+
+def test_the_report_fits_as_a_content_plan_context_file():
+    spec = definition()
+    assert spec["procedure"]["output"]["max_bytes"] <= CONTEXT_FILE_LIMIT
+    source = (ROOT / "src/tin_lite/content_plan_sources.py").read_text(encoding="utf-8")
+    assert f"len(content) > {CONTEXT_FILE_LIMIT:_}" in source
+    assert "content.plan" in spec["description"] or "Plan upcoming content" in spec["description"]
+
+
+def test_manifest_declares_recommended_project_context():
+    spec = definition()
+    prerequisites = parse_workflow_prerequisites(
+        spec["prerequisites"], input_schema=spec["input_schema"]
+    )
+    assert {p.level for p in prerequisites} == {"recommended"}
+    assert [(p.section, p.producer) for p in prerequisites if p.kind == "artifact"] == [
+        ("### Code map", "product.code_map")
+    ]
+    assert sorted(p.workflow for p in prerequisites if p.kind == "run") == [
+        "organic.audit",
+        "organic.keyword_plan",
+    ]
+    assert spec["system"] == "organic-traffic"
+    assert spec["procedure"]["sandbox"]["egress"] == "fenced"
+
+
+def test_qualification_inputs_satisfy_the_manifest():
+    schema = definition()["input_schema"]
+    contract = Qualification.model_validate(json.loads(CASES.read_text(encoding="utf-8")))
+    for item in contract.cases:
+        normalize_workflow_inputs(schema=schema, project_id=CASE_PROJECT, inputs=item.inputs)
+
+
+def test_a_plan_ready_report_passes_the_ordinary_case():
+    report = (FIXTURES / "ordinary_report.md").read_bytes()
+    assert len(report) < 18_000
+    result = assess_output(case("ordinary"), status="succeeded", content=report)
+    assert result["status"] == "passed", result["checks"]
+
+
+def test_a_plausible_but_unusable_report_fails_the_ordinary_case():
+    # Ranks an operator variable as user-facing, invents traffic and names a missing workflow.
+    report = (FIXTURES / "unusable_report.md").read_bytes()
+    result = assess_output(case("ordinary"), status="succeeded", content=report)
+    assert result["status"] == "failed"
+    failed = {check["check"] for check in result["checks"] if not check["passed"]}
+    contains = case("ordinary").expect.contains
+    for phrase in ("## Page facts for content.plan", "Cause:", "context files"):
+        assert f"contains:{contains.index(phrase)}" in failed
+    assert {"excludes:1", "excludes:2", "excludes:3"} <= failed

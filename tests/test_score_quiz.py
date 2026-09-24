@@ -15,6 +15,7 @@ from test_public_workflows import PublishedSnapshots, select
 from test_registry_recipe_publication import WIKI, catalog_database
 
 from tin_lite import catalog
+from tin_lite.code_models import request_contract
 from tin_lite.community import REPOSITORY_ROOT
 from tin_lite.workflow_code import load_code_package, validate_code_definition, validate_code_result
 
@@ -257,3 +258,78 @@ async def test_publishes_through_the_real_catalog_sync_like_the_shipped_examples
     assert (
         files["main.py"] == (REPOSITORY_ROOT / "workflow_packages" / KEY / "main.py").read_bytes()
     )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        'https://loopwire.example/quiz" onmouseover="alert(1)',
+        "https://loopwire.example/quiz'><script>alert(1)</script>",
+        "https://loopwire.example/a b",
+        "javascript:alert(1)//https://",
+        "https:///no-host",
+    ],
+)
+async def test_rejects_a_signup_url_that_could_break_out_of_the_link(url):
+    module, _ = _load()
+    context, calls = _context()
+    with pytest.raises(ValueError, match="https://"):
+        await module.run(context, {**GOOD_INPUTS, "signup_url": url})
+    assert calls == []
+
+
+async def test_widget_sets_the_link_through_the_dom_not_markup():
+    module, _ = _load()
+    context, _ = _context()
+    content = (await module.run(context, GOOD_INPUTS))["content"]
+    assert "link.href = DATA.signup_url;" in content
+    assert "href=\"' + DATA.signup_url" not in content
+    assert '.replace(/"/g, "&quot;")' in content
+
+
+async def test_neutralizes_comment_and_fence_breakouts_in_model_text():
+    module, _ = _load()
+    hostile_question = _question(
+        "Do you use ``` fences or <!-- comments --> & entities?",
+        (0, "No `ticks` here"),
+        (3, "Yes </SCRIPT > sometimes"),
+    )
+    context, _ = _context(
+        quiz={**GOOD_QUIZ, "questions": [hostile_question, *GOOD_QUIZ["questions"][1:]]}
+    )
+    content = (await module.run(context, GOOD_INPUTS))["content"]
+    blob = re.search(r"var DATA = (\{.*\});", content).group(1)
+    for raw in ("<", ">", "&", "`"):
+        assert raw not in blob
+    # The only code fence is the one the report opens and closes around the widget.
+    assert content.count("```") == 2
+    data = json.loads(blob)
+    assert data["questions"][0]["text"] == hostile_question["text"]
+    assert data["questions"][0]["options"][1]["label"] == "Yes </SCRIPT > sometimes"
+
+
+async def test_rejects_a_plausible_quiz_that_slips_a_link_into_a_verdict():
+    module, _ = _load()
+    bands = [dict(band) for band in GOOD_QUIZ["bands"]]
+    bands[0]["verdict"] = "Start with our free guide at www.loopwire-guides.example."
+    context, calls = _context(quiz={**GOOD_QUIZ, "bands": bands})
+    with pytest.raises(ValueError, match="invent its own link"):
+        await module.run(context, GOOD_INPUTS)
+    assert [c["step"] for c in calls] == ["design_quiz"]
+
+
+async def test_passes_product_context_and_voice_as_data_not_instructions():
+    module, definition = _load()
+    spec = validate_code_definition(definition)
+    context, calls = _context()
+    inputs = {
+        **GOOD_INPUTS,
+        "product_summary": "Loopwire shows why each API request was rate limited.",
+        "voice_notes": "Plain words, no exclamation marks.",
+    }
+    await module.run(context, inputs)
+    for call in calls:
+        request_contract(spec, call)
+        assert call["data"]["voice_notes"] == "Plain words, no exclamation marks."
+        assert "Loopwire" not in call["instructions"]
+    assert calls[1]["data"]["product_summary"] == inputs["product_summary"]

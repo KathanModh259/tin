@@ -3,28 +3,29 @@
   "definition": {
     "key": "outreach.syllabus_placement",
     "title": "Get your product taught in the courses that pick students' tools",
-    "description": "For a company whose product students could learn on: find public course pages that teach that job, rank them by when the instructor next chooses tools, and draft a teaching kit and one note per course. Nothing is sent.",
+    "description": "For a product students could learn on: finds public courses that teach its job, ranks them by when the instructor next picks tools, and drafts a teaching kit and one note per course in your voice. Skips courses earlier runs already listed; nothing is sent.",
     "executor": "codex.procedure",
-    "version": "1.0.1",
+    "version": "1.1.0",
     "schedule_modes": ["on_demand"],
+    "system": "cold-outreach",
     "input_schema": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["project_id", "teaching_job"],
+      "required": ["project_id"],
       "properties": {
         "project_id": { "type": "string", "format": "uuid" },
         "teaching_job": {
           "type": "string",
-          "title": "What a student would use your product to do",
-          "description": "The task in a course's own words, e.g. collect survey data on phones in the field.",
-          "minLength": 3,
+          "title": "What a student would use your product to do (optional)",
+          "description": "The task in a course's own words, e.g. collect survey data on phones in the field. Leave empty to derive it from the Feature map and growth plan.",
           "maxLength": 600,
+          "default": "",
           "x-tin-ui": { "control": "textarea", "order": 10 }
         },
         "alternatives": {
           "type": "string",
           "title": "What courses use for this today",
-          "description": "Competing tools, spreadsheets, paper forms, or doing it by hand.",
+          "description": "Competing tools, spreadsheets, paper forms, or doing it by hand. Leave empty to use competitors the project files name.",
           "maxLength": 600,
           "default": "",
           "x-tin-ui": { "control": "textarea", "order": 20 }
@@ -62,6 +63,30 @@
         }
       }
     },
+    "prerequisites": [
+      {
+        "kind": "artifact",
+        "level": "recommended",
+        "path": "wiki/INDEX.md",
+        "section": "### Feature map",
+        "producer": "product.deep_dive",
+        "reason": "The Feature map says what a student would do with the product when teaching_job is empty, and grounds the teaching kit."
+      },
+      {
+        "kind": "artifact",
+        "level": "recommended",
+        "path": "reports/GROWTH_ONBOARDING_PLAN.md",
+        "producer": "growth.onboarding_plan",
+        "reason": "The growth plan names the audience and records hard no's such as no cold email, which withholds the notes."
+      },
+      {
+        "kind": "artifact",
+        "level": "recommended",
+        "path": ".agents/skills/writing-style/SKILL.md",
+        "producer": "style.capture",
+        "reason": "A captured writing style guide shapes the notes to instructors."
+      }
+    ],
     "procedure": {
       "prompt_path": "PROMPT.md",
       "skills_path": "skills",
@@ -76,11 +101,10 @@
       "sandbox": { "profile": "isolated", "egress": "fenced", "timeout_seconds": 1800 },
       "output": {
         "kind": "project.artifact",
-        "path": "reports/SYLLABUS_PLACEMENT.md",
+        "path_template": "reports/outreach/syllabus/{run_id}.md",
         "media_type": "text/markdown",
         "max_bytes": 200000
       }
-    },
-    "system": "cold-outreach"
+    }
   }
 }

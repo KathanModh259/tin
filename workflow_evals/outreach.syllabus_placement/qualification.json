@@ -3,15 +3,16 @@
   "assumptions": [
     "Cases run against the live web through Codex web search; course pages change between runs, so assertions check structure, verdicts and exclusions rather than specific courses.",
     "The timing window (120 to 21 days before the next start) and once-a-year offerings are assumptions kept as constants in SCORING.md.",
-    "Run success establishes artifact delivery. Ordinary cases also need a human check that each shortlisted quote appears in the linked document."
+    "Run success establishes artifact delivery. Ordinary cases also need a human check that each shortlisted quote appears in the linked document.",
+    "Project context (the wiki/INDEX.md Feature map, reports/GROWTH_ONBOARDING_PLAN.md and the writing style guide) is read when present; a case with an empty teaching_job needs a project whose Feature map shows what a student would do with the product, or it ends with Status: needs context."
   ],
   "cost_drivers": [
     "One bounded Codex session with web search, at most 40 searches and 30 opened documents, 1800 seconds and one 200000-byte report. No managed-model routes or connected providers.",
     "Cost grows with how many course documents are PDFs that must be read in full, and with how quickly the fit gate can stop a poor fit."
   ],
   "effects": [
-    "Reads public web pages through web search.",
-    "Writes reports/SYLLABUS_PLACEMENT.md in this project.",
+    "Reads public web pages through web search, and wiki/INDEX.md, reports/GROWTH_ONBOARDING_PLAN.md, the writing style guide and earlier reports in reports/outreach/syllabus/ from project state.",
+    "Writes one run-owned reports/outreach/syllabus/<run_id>.md in this project.",
     "No logins to course platforms, no email addresses guessed, no messages sent, nothing published."
   ],
   "cases": [
@@ -37,9 +38,18 @@
           "Evidence: \"",
           "## Teaching kit",
           "Decide first",
-          "## Search log"
+          "## Search log",
+          "Job searched:",
+          "## Already listed",
+          "```tin-syllabus-state"
         ],
-        "excludes": ["udemy.com", "Status: incomplete", "@", "Verdict: not a fit", "citeturn"]
+        "excludes": [
+          "udemy.com",
+          "Status: incomplete",
+          "@",
+          "Verdict: not a fit",
+          "citeturn"
+        ]
       }
     },
     {
@@ -55,8 +65,17 @@
       },
       "expected_status": "succeeded",
       "expect": {
-        "contains": ["Status: complete", "## Funnel", "## Search log"],
-        "excludes": ["Verdict: fit", "## Notes to instructors", "## Teaching kit"]
+        "contains": [
+          "Status: complete",
+          "## Funnel",
+          "## Search log",
+          "```tin-syllabus-state"
+        ],
+        "excludes": [
+          "Verdict: fit",
+          "## Notes to instructors",
+          "## Teaching kit"
+        ]
       }
     },
     {
@@ -72,8 +91,45 @@
       },
       "expected_status": "succeeded",
       "expect": {
-        "contains": ["Status: complete", "## Teaching kit", "60 students"],
-        "excludes": ["Decide first", "udemy.com", "@", "citeturn"]
+        "contains": [
+          "Status: complete",
+          "## Teaching kit",
+          "60 students",
+          "Job searched:",
+          "## Already listed",
+          "```tin-syllabus-state"
+        ],
+        "excludes": [
+          "Decide first",
+          "udemy.com",
+          "@",
+          "citeturn"
+        ]
+      }
+    },
+    {
+      "id": "job_from_project_context",
+      "description": "No teaching_job input: the job is derived from the project's Feature map and growth plan and named on the Job searched line, instead of being asked for or invented.",
+      "inputs": {
+        "teaching_job": "",
+        "alternatives": "",
+        "subjects": "",
+        "geography": "",
+        "education_offer": "",
+        "max_courses": 5
+      },
+      "expected_status": "succeeded",
+      "expect": {
+        "contains": [
+          "Verdict: ",
+          "Job searched:",
+          "Context:",
+          "```tin-syllabus-state"
+        ],
+        "excludes": [
+          "citeturn",
+          "@"
+        ]
       }
     }
   ]

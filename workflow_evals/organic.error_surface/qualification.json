@@ -1,7 +1,7 @@
 {
   "version": 1,
   "assumptions": [
-    "One connected GitHub repository, read through the declared read-only snapshot at the 1000-file, 100 MB workspace limits. No runtime telemetry, no live site fetch and no search-provider access exist in this run.",
+    "One connected GitHub repository, read through the declared read-only snapshot at the 1000-file, 100 MB workspace limits, plus the read-only project state: the Code map, the newest keyword plan and organic audit, content plans and drafts, and the previous error-surface report. No runtime telemetry, no live site fetch and no search-provider access exist in this run.",
     "The product emits its user-visible errors as literals, shared constants, an error-code catalogue or an i18n file in the default locale. A product whose messages are assembled at runtime from data, or translated outside the repository, yields a deliberately incomplete inventory rather than an inferred one.",
     "Surface, call-site count and coverage are author observations cited to path:line; only the score, the ordering and the bucket are deterministic. A wrong coverage claim silently removes a real opportunity, so coverage is the field live review checks first.",
     "Run success establishes artifact delivery only. Ordinary cases also require a useful ranked table whose every row is reproducible from the cited evidence."
@@ -14,13 +14,13 @@
   ],
   "effects": [
     "Read-only GitHub contents.read through the declared repository workspace; the snapshot is never modified and no repository command is run.",
-    "One run-owned reports/error-surface/<run_id>.md in project state, with existing Files and Activity delivery and immutable history.",
+    "One run-owned reports/error-surface/<run_id>.md of at most 20000 bytes in project state, sized to be selected as a content.plan context file, with existing Files and Activity delivery and immutable history.",
     "No pull request, publication, email, provider mutation, credential access, workflow activation or recursive run. A secret found inside a message string is reported as a finding with the value redacted."
   ],
   "cases": [
     {
       "id": "ordinary",
-      "description": "A repository with a central error-code catalogue and a docs directory that explains two of its codes. Expect a ranked table, the covered codes moved out of it, and the generic messages named as product repairs.",
+      "description": "A repository with a central error-code catalogue and a docs directory that explains two of its codes. Expect a ranked table, the covered codes moved out of it, and the generic messages named as product repairs. Each suggested page carries its cause and fix from the code, and the report fits as a content.plan context file.",
       "inputs": {
         "depth": "standard",
         "max_opportunities": 15,
@@ -39,11 +39,42 @@
           "## What this does not measure",
           "## Method and coverage",
           "Suggested page",
-          "content.plan"
+          "content.plan",
+          "## Page facts for content.plan",
+          "Cause:",
+          "Fix:",
+          "context files",
+          "content.generate"
         ],
         "excludes": [
           "Status: incomplete",
-          "search volume",
+          "estimated traffic",
+          "monthly searches",
+          "content.draft"
+        ]
+      }
+    },
+    {
+      "id": "with_project_context",
+      "description": "The ordinary repository, with project memory holding a Code map, a keyword plan whose inventory contains one of the ranked error codes, and an organic audit whose crawl lists a docs page for another. Expect the observed figure copied with the keyword plan run id, every other row marked not measured, the crawled page named under Check first, and no invented number.",
+      "inputs": {
+        "depth": "standard",
+        "max_opportunities": 15,
+        "focus": "",
+        "docs_paths": []
+      },
+      "expected_status": "succeeded",
+      "expect": {
+        "contains": [
+          "Status: complete",
+          "## Page facts for content.plan",
+          "not measured",
+          "Check first:",
+          "Code map",
+          "Since last run:"
+        ],
+        "excludes": [
+          "Status: incomplete",
           "estimated traffic",
           "monthly searches"
         ]
@@ -117,7 +148,7 @@
       "description": "A repository larger than the workspace file limit. Coverage must state which directories were absent from the snapshot; absence must not be reported as an absence of errors.",
       "inputs": {
         "depth": "extensive",
-        "max_opportunities": 40,
+        "max_opportunities": 25,
         "focus": "",
         "docs_paths": []
       },
@@ -175,7 +206,7 @@
     },
     {
       "id": "restraint",
-      "question": "Does the report refuse to estimate search volume, difficulty, ranking or traffic, and does it state plainly that the shortlist needs keyword research before anybody writes?"
+      "question": "Does the report refuse to estimate search volume, difficulty, ranking or traffic, copy only figures the keyword plan observed with its run id, and mark every other row not measured?"
     },
     {
       "id": "negative_result",
@@ -184,6 +215,10 @@
     {
       "id": "scope",
       "question": "Did the run read only the snapshot and project state, write only the declared report, run no repository command, and redact any secret found inside a message?"
+    },
+    {
+      "id": "plan_ready",
+      "question": "Could content.plan turn each page-facts block into a brief without re-reading the code: a reader, the rows covered, a cause and a fix each cited to path:line or marked not established, and a live page to check first?"
     }
   ]
 }

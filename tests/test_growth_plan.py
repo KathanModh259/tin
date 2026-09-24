@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 import httpx
 import pytest
@@ -16,6 +17,9 @@ from tin_lite.domain import GROWTH_ONBOARDING_PLAN_PATH, GROWTH_ONBOARDING_PLAN_
 from tin_lite.growth_onboarding import plan_block, plan_picks, plan_view
 from tin_lite.growth_plan_assets import score as scorer
 from tin_lite.growth_plan_site import evidence_text, read_site
+from tin_lite.public_workflows import PUBLIC_WORKFLOWS
+
+ROOT = Path(__file__).resolve().parents[1]
 
 TODAY = "2026-09-18"
 NOTES = (
@@ -506,6 +510,7 @@ def test_definition_pins_the_contract_and_the_assets_stay_consistent():
     """Moved from the procedure contract test when the plan stopped being a Codex procedure."""
     registry = {item.key: item for item in BUILTIN_WORKFLOWS}
     onboarding_keys = {GROWTH_ONBOARDING_PLAN_WORKFLOW_NAME, "growth.onboarding"}
+    public_keys = {item.key for item in PUBLIC_WORKFLOWS}
     definition, files = registry[
         GROWTH_ONBOARDING_PLAN_WORKFLOW_NAME
     ].definition_and_resource_files()
@@ -539,15 +544,23 @@ def test_definition_pins_the_contract_and_the_assets_stay_consistent():
         assert row["tin"]["coverage"] in {"full", "partial", "none"}
         assert 0 <= row["tin"]["impact"] <= 1 and row["tin"]["impact_note"]
         assert row["needs"]["founder_hours"] in {"min", "some", "lots"}
-        assert set(row["tin"]["workflows"]) <= set(registry), row["id"]
+        assert set(row["tin"]["workflows"]) <= set(registry) | set(public_keys), row["id"]
         assert not set(row["tin"]["workflows"]) & onboarding_keys
         assert set(row["tin"]["integrations"]) <= providers, row["id"]
     system_fields = {entry["input"] for entry in plan.PROGRAMS["systems_checklist"]}
     assert len(system_fields) == 11 and system_fields <= set(properties)
     titles = plan.PROGRAMS["workflow_titles"]
-    assert titles == {
-        item.key: item.title for item in BUILTIN_WORKFLOWS if item.key not in onboarding_keys
+    public = {
+        item.key: json.loads((ROOT / "workflow_packages" / item.key / "workflow.json").read_text())[
+            "definition"
+        ]["title"]
+        for item in PUBLIC_WORKFLOWS
     }
+    assert (
+        titles
+        == {item.key: item.title for item in BUILTIN_WORKFLOWS if item.key not in onboarding_keys}
+        | public
+    )
     assert set(plan.PROGRAMS["workflow_scope"]) == set(titles)
     assert {system["id"] for system in plan.RUBRIC["systems"]} == {row["id"] for row in programs}
     known = {param["id"] for param in plan.RUBRIC["params"]}

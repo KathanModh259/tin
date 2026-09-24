@@ -57,6 +57,8 @@ PROVIDERS = {
     "analytics.gsc": "Google Search Console",
     "workspace.google": "Google Workspace",
     "ads.google": "Google Ads",
+    "custom.api.stripe": "a Stripe API connection",
+    "custom.api.posthog": "a PostHog API connection",
 }
 WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 

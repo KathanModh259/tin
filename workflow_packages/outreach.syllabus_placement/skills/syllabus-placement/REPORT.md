@@ -1,17 +1,19 @@
 # Report shape
 
-Write `reports/SYLLABUS_PLACEMENT.md` in this order. Keep evidence (quotes, URLs, dates read
-from a page) separate from judgment (slot, kit, notes). Use the headings and field labels
+Write the report to the declared output path in this order. Keep evidence (quotes, URLs,
+dates read from a page) separate from judgment (slot, kit, notes). Use the headings and field labels
 exactly as shown, with straight quotes, so later runs and checks can read the report.
 Cite with plain Markdown links. Remove any citation markers the search tool inserts into
 the text (tokens such as `cite` followed by `turn` references); they are not links.
 
-```markdown
+````markdown
 # Syllabus placement: <product or project name>
 
-Status: complete | incomplete
+Status: complete | incomplete | needs context
 Verdict: fit | thin | not a fit
 As of: <YYYY-MM-DD UTC>
+Job searched: <the job; "from teaching_job" or the Feature map / growth plan lines it came from>
+Context: <Feature map, growth plan, writing style guide: "read" or "none found" for each>
 
 <Two or three sentences: how many instructors to write to this week, when the next group
 opens, and the one thing to decide first if there is no education offer.>
@@ -25,6 +27,7 @@ opens, and the one thing to decide first if there is no education offer.>
 | Courses recorded | … |
 | Verified from the course document | … |
 | Students do the job hands-on | … |
+| Already listed in an earlier run | … |
 | Shortlisted | … |
 | Write to this week | … |
 
@@ -52,7 +55,17 @@ For each course, in SCORING.md order:
 
 ## Notes to instructors
 
-<One note per contact_now course, under 120 words each.>
+<One note per contact_now course, under 120 words each, in the writing style guide's voice.
+Or one line: "Not drafted: the growth plan's hard no on cold email.">
+
+## Already listed
+
+<courses from `already_listed`: course, institution, and the date and report that listed them.
+Or "- none".>
+
+## Carried forward
+
+<courses from `carried_forward`: course, institution, decision and send date. Or "- none".>
 
 ## Already teaching with you
 
@@ -74,11 +87,20 @@ For each course, in SCORING.md order:
 <One row per query, even when the search tool pooled several queries' results.>
 
 <Syllabus index URLs worth starting from next time.>
+
+```tin-syllabus-state
+<the state returned by plan(), as JSON>
 ```
+````
+
+The fenced block is written with Python from `plan()`'s return value, never retyped, and is
+the only memory the next run has. Write it in every report, including short ones; with no new
+courses it repeats the merged earlier state.
 
 For `Verdict: not a fit`, write the header, the funnel, what was searched, what the opened
 documents showed instead, and one sentence on what would change the answer (another subject,
 another region, or a different phrasing of the job). Leave out the kit and the notes.
+`Status: needs context` is also `Verdict: not a fit`, with no search: say what is missing.
 
 For `Verdict: thin`, write the full report but keep the teaching kit to the one-session lab
 plan for the courses on the shortlist. One or two courses are worth a note; they are not

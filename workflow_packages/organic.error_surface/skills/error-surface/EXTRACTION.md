@@ -15,8 +15,9 @@ or tidy a message; the invariant text is the whole asset and editing it destroys
 
 ## Where to look first
 
-Orient before grepping. Read the README, the package manifest, and the route or command table so
-you know which directories are user-facing. Then work outward from the product's own error
+Orient before grepping. When `/home/user/state/wiki/INDEX.md` has a `### Code map`, start from
+its user-facing surfaces and their cited files. Then read the README, the package manifest, and
+the route or command table so you know which directories are user-facing. Then work outward from the product's own error
 vocabulary, because a codebase that defines error classes or an error-code enum has already done
 the extraction for you:
 

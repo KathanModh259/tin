@@ -8,6 +8,42 @@ Start with code when you know the steps. Add model calls where judgment is usefu
 procedure when an agent needs to choose the steps. [Adding a workflow](../docs/adding-a-workflow.md)
 covers authoring, tests and the maintainer-controlled public Registry registration.
 
+## How the packages fit together
+
+Registry packages build on what Tin already knows about a project instead of asking the
+founder again. Before adding inputs, read these:
+
+- `reports/GROWTH_ONBOARDING_PLAN.md` from Start here: the business, its buyers, budget and
+  hard no's. Respect the hard no's.
+- `wiki/INDEX.md`: its `### Code map` (`product.code_map`) and `### Feature map`
+  (`product.deep_dive`) sections.
+- `.agents/skills/writing-style/SKILL.md` from `style.capture`, for any copy drafted in the
+  founder's voice.
+- Outputs of earlier runs, such as the keyword plan, the organic audit and the signup walkthrough.
+
+Declare what you read as `recommended` prerequisites so the dashboard and MCP show readiness.
+A procedure writes only its declared output. A weekly package keeps its history in a
+`path_template` report ending in a JSON evidence block, which the next run reads back.
+
+| Package | Builds on | Hands off to | Onboarding program |
+|---|---|---|---|
+| `organic.error_surface` | Code map, keyword plan, audit | `content.plan` (`context_files`), `content.generate` | Organic search content |
+| `organic.mention_backlinks` | onboarding plan, organic and visibility audits, style guide | founder sends the asks | AI visibility |
+| `competitor.watch` | its last report, keyword plan and ads competitors, Feature map | `content.public_article`, `content.plan`, `research.deep_dive` | Pricing and packaging |
+| `qa.buyer_trust` | signup walkthrough, Feature map, onboarding plan | `site.health_improve` (code), founder (policy, host) | Conversion and trust |
+| `growth.score_quiz` | Feature map, style guide (filled in by the agent) | founder embeds the widget | Conversion and trust |
+| `product.analytics_brief` | PostHog API connection | its next scheduled brief | Product-led growth |
+| `outreach.paying_segment` | Stripe API connection, onboarding plan | `outreach.email_shortlist`, `organic.keyword_plan`, `ads.assessment` inputs | Cold outbound, pricing |
+| `outreach.speaking_shortlist` | Feature map, onboarding plan, style guide, its earlier reports | founder submits | Earned media, community |
+| `outreach.syllabus_placement` | Feature map, onboarding plan, style guide, its earlier reports | founder sends | Partnerships and channel |
+| `outreach.campus_events` | onboarding plan, Feature map, style guide | founder pitches the organizer | Community and events |
+| `outreach.marketplace_listings` | Code map (required), Feature map, style guide | founder submits the listing | Platform and marketplaces |
+| `content.release_announce` | changelog, style guide (filled in by the agent) | founder posts and sends | Owned audience, launches |
+
+The onboarding plan lists these under their programs in
+[programs.json](../src/tin_lite/growth_plan_assets/programs.json), with one `workflow_scope`
+line each. A new Registry package needs the same.
+
 ## Code examples
 
 - [CSV summary](example.csv_summary/workflow.json): deterministic parsing, validation and totals.

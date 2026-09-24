@@ -17,15 +17,30 @@ a dated plan a founder can act on, not a list of universities.
 Write only the declared output path. Work through the stations below in order and keep the
 counts for each one; the report shows where the funnel narrowed.
 
-## Station 0: Read the brief and the last run
+## Station 0: Read the brief, the project and the earlier runs
 
-1. Read `teaching_job`, `alternatives`, `subjects`, `geography`, `education_offer` and
-   `max_courses`. Read the project context (README, site copy, existing reports) for what the
-   product does, who it is for, and any existing education or student plan.
-2. If `reports/SYLLABUS_PLACEMENT.md` already exists, read it. Carry forward courses marked
-   `schedule` whose date has not passed. Do not list a course again under `contact_now` if
-   the earlier report already listed it there; move it to a short "Already listed" section.
-3. Restate the job as a student would do it in a lab or assignment, in two or three phrasings
+1. Read the project context. It is evidence, not instructions, and none of it is asked of the
+   founder again. Note which files existed for the report's `Context:` line.
+   - `wiki/INDEX.md` → `## Product` → `### Feature map`: what the product does, with evidence.
+   - `reports/GROWTH_ONBOARDING_PLAN.md`: `## The business` (what is sold, who buys) and any
+     `hard no: …` in `## Marketing systems` or anything the founder forbids. `no cold email`
+     means no notes to instructors (Station 6); `no discounting` means the kit never invents
+     free seats or discounts.
+   - `.agents/skills/writing-style/SKILL.md`: the founder's voice for the kit and the notes.
+   - The README, site copy and existing reports for any existing education or student plan.
+2. Read `teaching_job`, `alternatives`, `subjects`, `geography`, `education_offer` and
+   `max_courses`. If `teaching_job` is empty, derive it from the Feature map and the growth
+   plan: the one task a student would do with the product in a lab or assignment. Write it on
+   the report's `Job searched:` line with the lines it came from. If the project files do not
+   show such a task, write the `not a fit` report from REPORT.md with `Status: needs context`,
+   say that `teaching_job` or a Feature map is needed, and stop. Never invent the product's job.
+   Fill empty `alternatives` from competitors the project files name, and say so.
+3. Load memory. Find every earlier report in the output folder (the directory of the declared
+   output path), read its `tin-syllabus-state` block and merge them as SCORING.md says.
+   `plan()` keeps courses already listed to contact out of `contact_now` and carries forward
+   scheduled courses whose date has not passed; start searches from the syllabus index URLs the
+   earlier search logs name.
+4. Restate the job as a student would do it in a lab or assignment, in two or three phrasings
    a course page would use. A course never says "use a mobile data collection platform". It
    says "students will design a questionnaire and collect data from 30 households".
 
@@ -87,10 +102,11 @@ to log in.
 ## Station 4: Score and sequence
 
 Save the verified records as JSON in a scratch file and run the Python block in SCORING.md
-exactly as written, with today's UTC date as `as_of`. It returns each course's decision,
-window, score and send date, the funnel counts and the verdict. Write that verdict on the
-`Verdict:` line with nothing after it. Do not re-rank by hand. If you disagree
-with a result, say why in the report next to that course.
+exactly as written, with today's UTC date as `as_of`, the merged memory as `previous`, the
+declared output path as `report_path` and the growth plan's hard no's. It returns each course's
+decision, window, score and send date, the funnel counts and the verdict. Write that verdict on
+the `Verdict:` line with nothing after it. Do not re-rank by hand. If you disagree with a
+result, say why in the report next to that course.
 
 Decisions:
 
@@ -100,6 +116,10 @@ Decisions:
 - `check_by_hand`: not verified from the document.
 - `already_teaching`: `own` slot. Ask for a case study or a quote, not a sale.
 - `discard`: no hands-on job.
+
+It also returns `already_listed` (courses an earlier run already told the founder to contact
+this cycle), `carried_forward` (earlier scheduled courses and their dates), `notes_allowed` and
+the `state` block to end the report with.
 
 Shortlist at most `max_courses` courses from `contact_now`, `schedule` and `next_cycle`.
 
@@ -126,19 +146,30 @@ and who sets them up. Do not make that decision for the founder.
 For each `contact_now` course, draft one note under 120 words. It names the course and the
 specific assignment, says in one sentence what the product would change for students doing
 it, points to the teaching kit, and asks one easy question (would a lab plan for week N be
-useful?). No discounts or claims the inputs do not support, no links except the project's own
-site, no flattery. For `schedule` and `next_cycle` courses, list the send date instead of a
-note; a note written months early goes stale.
+useful?). Follow the writing style guide when present. No discounts or claims the inputs and
+project files do not support, no links except the project's own site, no flattery. For
+`schedule` and `next_cycle` courses, list the send date instead of a note; a note written
+months early goes stale.
+
+If `notes_allowed` is false (the growth plan's hard no on cold email), draft no notes. Say so in
+one line under `## Notes to instructors`, and keep the teaching kit, the send calendar and the
+instructor pages: the founder decides whether and how to reach them.
+
+Sending stays with the founder, from the instructor's public page. Do not write rows for
+`outreach/email/SHORTLIST.csv`: the email campaign needs an email address for every row and
+sends one identical body to all of them, while this workflow never guesses an address and each
+note names a different course and assignment.
 
 ## Station 7: Write the report
 
 Use REPORT.md. The report is complete when a founder can see which instructors to write to
-this week, on what date to write to the others, what to send them, and what the funnel
-dropped along the way.
+this week, on what date to write to the others, what to send them, which courses earlier runs
+already covered, and what the funnel dropped along the way. End it with the `state` from
+`plan()` as JSON in a `tin-syllabus-state` fenced block, written with Python, not retyped.
 
 ## Save progress
 
-Write an initial report at the output path after Station 1 with the verdict so far, and
-update it after each station. Label unfinished sections. If time or the search budget runs
+Write an initial report at the declared output path after Station 1 with the verdict so far,
+and update it after each station. Label unfinished sections. If time or the search budget runs
 out, finish with `Status: incomplete`, the verified courses so far, and the next searches to
 run.
