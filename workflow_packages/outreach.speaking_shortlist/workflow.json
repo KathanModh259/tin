@@ -1,0 +1,72 @@
+{
+  "package_format": "tin-workflow-package-v1",
+  "definition": {
+    "key": "outreach.speaking_shortlist",
+    "title": "Find the talks and podcasts worth pitching",
+    "description": "Find conferences, meetups and podcasts currently accepting speakers or guests that fit a specific expertise or story, verify each one's deadline and submission requirements, and draft one tailored pitch per venue for a human to review and send.",
+    "executor": "codex.procedure",
+    "version": "1.0.1",
+    "schedule_modes": ["on_demand"],
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project_id", "expertise"],
+      "properties": {
+        "project_id": { "type": "string", "format": "uuid" },
+        "expertise": {
+          "type": "string",
+          "title": "What you're pitching",
+          "description": "The specific talk, lesson or story you want to pitch, and who in the audience should care.",
+          "minLength": 1,
+          "maxLength": 2000,
+          "x-tin-ui": { "control": "textarea", "order": 10 }
+        },
+        "format_preference": {
+          "type": "string",
+          "title": "Format",
+          "enum": ["no_preference", "conference_talk", "meetup_talk", "podcast_guest"],
+          "default": "no_preference",
+          "x-tin-ui": { "control": "select", "order": 20 }
+        },
+        "already_pitched": {
+          "type": "string",
+          "title": "Venues already pitched",
+          "description": "Conferences, meetups or podcasts to skip because you've already submitted or been declined.",
+          "maxLength": 2000,
+          "default": "",
+          "x-tin-ui": { "control": "textarea", "order": 30 }
+        },
+        "max_venues": {
+          "type": "integer",
+          "title": "Maximum venues",
+          "minimum": 3,
+          "maximum": 20,
+          "default": 10,
+          "x-tin-ui": { "control": "counter", "order": 40 }
+        },
+        "tone_notes": {
+          "type": "string",
+          "title": "Voice notes",
+          "description": "Optional: how the drafted pitches should sound.",
+          "maxLength": 1000,
+          "default": "",
+          "x-tin-ui": { "control": "textarea", "order": 50 }
+        }
+      }
+    },
+    "procedure": {
+      "prompt_path": "PROMPT.md",
+      "skills_path": "skills",
+      "skill_files": ["skills/speaking-shortlist/SKILL.md"],
+      "entry_skill": "speaking-shortlist",
+      "workspace": { "kind": "project.state" },
+      "sandbox": { "profile": "isolated", "egress": "fenced", "timeout_seconds": 900 },
+      "output": {
+        "kind": "project.artifact",
+        "path": "reports/SPEAKING_SHORTLIST.md",
+        "media_type": "text/markdown",
+        "max_bytes": 150000
+      }
+    }
+  }
+}
