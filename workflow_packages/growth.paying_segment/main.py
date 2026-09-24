@@ -643,8 +643,9 @@ def render(now, settings, analysis):
     elif analysis["livemode"] == {True, False}:
         header.append("Data: a mix of live and test-mode subscriptions. Check the connected key.")
     excluded = analysis["records_excluded"]
+    calls = len(analysis["requests"])
     coverage = (
-        f"Read {analysis['fetched']} subscriptions in {len(analysis['requests'])} requests "
+        f"Read {analysis['fetched']} subscriptions in {calls} request{'s' * (calls != 1)} "
         f"({analysis['customers']} customers, {len(judged)} old enough to judge"
         + (f", {excluded} excluded by domain" if excluded else "")
         + ")."
@@ -690,8 +691,8 @@ def answer(decision, analysis, settings, target, avoid, leading, overall, curren
         return [
             f"Not enough customers to judge yet: {len(judged)} of the {decision['floor']} needed.",
             f"Next action: keep this workflow on its weekly schedule. It needs about {need} more "
-            f"customers who started at least {settings['retention_days']} days ago; "
-            f"{analysis['too_young']} newer customers are already on the way.",
+            f"customers who started at least {settings['retention_days']} days ago. "
+            "Newer subscriptions are not read until they are old enough to judge.",
         ]
     lines = [f"Across {overall['n']} judged customers, {percent(overall['rate'])} paid and stayed."]
     if target:
@@ -864,13 +865,18 @@ def limits(analysis, settings):
         "never written to this report; only company domains of retained customers are.",
         "- Discount is what the subscription carries now, not necessarily at signup.",
         "- Monthly value is today's list price of subscriptions still paying, before discounts "
-        f"and tax, in {(analysis['primary_currency'] or 'n/a').upper()}; "
+        f"and tax, in {(analysis['primary_currency'] or '').upper() or 'the main currency'}; "
         f"{analysis['other_currency']} customers in other currencies or on usage-based prices "
         "count for keep rate but not for value.",
-        f"- Each segment is compared with everyone else by a two-sided Fisher exact test; "
-        f"Holm's correction covers all {distinct} distinct comparisons. A segment needs "
-        f"{settings['min_segment_size']} customers on both sides to be compared.",
-        f"- {analysis['too_young']} customers are too new to judge and are not in any rate.",
+        "- Each segment is compared with everyone else by a two-sided Fisher exact test"
+        + (
+            f"; Holm's correction covers all {distinct} distinct comparisons."
+            if distinct
+            else ". No segment was large enough to compare in this run."
+        )
+        + f" A segment needs {settings['min_segment_size']} customers on both sides.",
+        f"- Subscriptions created in the last {settings['retention_days']} days are not read. "
+        f"{analysis['too_young']} of those read were still in a trial too recent to judge.",
         "- Past-due subscriptions still count as paying; cancelled-at-period-end ones count "
         "until they end.",
     ]
