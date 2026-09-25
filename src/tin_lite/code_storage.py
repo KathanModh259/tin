@@ -13,7 +13,7 @@ import httpx
 import jwt
 from cryptography.hazmat.primitives import serialization
 from pierre_storage import GitStorage
-from pierre_storage.errors import ApiError
+from pierre_storage.errors import ApiError, RefUpdateError
 from pierre_storage.types import GitFileMode, Repo
 from pierre_storage.version import get_user_agent
 
@@ -87,6 +87,18 @@ class SandboxRemotes:
     canonical_auth_header: str
     ephemeral_url: str
     ephemeral_auth_header: str
+
+
+_REF_CONFLICTS = {"conflict", "precondition_failed", "409", "412"}
+
+
+def _project_commit_error(exc: RefUpdateError) -> Exception:
+    """Name a rejected member commit in the terms the file service and MCP understand."""
+    if "no changes" in (exc.message or "").lower():
+        return ValueError("no changes: files already match expected_revision")
+    if {str(exc.reason).lower(), str(exc.status).lower()} & _REF_CONFLICTS:
+        return RuntimeError("canonical project state changed before file commit")
+    return RuntimeError(f"code.storage rejected the project file commit ({exc.reason})")
 
 
 class CodeStorage:
@@ -940,11 +952,13 @@ class CodeStorage:
         try:
             result = await builder.send()
             return result["commit_sha"], tuple(sorted(changed_paths))
-        except Exception:
+        except Exception as exc:
             recent = await repo.list_commits(branch=branch, limit=1, ttl=300)
             commits = recent.get("commits", [])
             if commits and commits[0].get("message") == commit_message:
                 return commits[0]["sha"], tuple(sorted(changed_paths))
+            if isinstance(exc, RefUpdateError):
+                raise _project_commit_error(exc) from exc
             raise
 
     async def revert_latest_project_commit(

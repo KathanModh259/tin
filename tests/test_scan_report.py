@@ -72,7 +72,7 @@ class FakeDatabase:
     async def list_memory_source_runs(self, **values) -> list[WorkflowRun]:
         raise AssertionError("ready project memory should be the only project scan source")
 
-    async def get_effect(self, execution_key: str):
+    async def get_effect(self, execution_key: str, conn=None):
         return self.receipts.get(execution_key)
 
     async def project_success(self, **values) -> None:

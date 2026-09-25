@@ -421,3 +421,69 @@ async def test_validated_capture_pair_is_reviewed_then_adopted(publication_db):
     assert f.storage.repo.trees[f.storage.repo.head][brand.DESIGN_PATH][1] == DESIGN
     await activities.project_codex_procedure_result(str(run.id))
     assert (await f.db.get_run(run.id)).status.value == "succeeded"
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        {"kind": "packet_only", "rubric_version": "marketing-brand.v1"},
+        {"kind": "visual_capture"},
+        {},
+        None,  # omitted
+    ],
+)
+def test_variant_assessment_method_is_normalized_with_a_note(method):
+    report = deepcopy(ASSESSMENT)
+    if method is None:
+        del report["method"]
+    else:
+        report["method"] = method
+    notes = []
+    assert brand.validate_new_brand(brand_doc(assessment=report).decode(), notes=notes) == TOKENS
+    value = brand.assessment(brand_doc(assessment=report).decode())
+    assert value["method"] == brand.METHOD
+    assert len(notes) == 1 and "visual_capture" in notes[0]
+    canonical = []
+    brand.validate_new_brand(brand_doc().decode(), notes=canonical)
+    assert canonical == []
+
+
+@pytest.mark.parametrize("method", ["visual_capture", ["visual_capture"], 1])
+def test_assessment_method_that_is_not_an_object_is_rejected(method):
+    report = {**ASSESSMENT, "method": method}
+    with pytest.raises(ValueError, match="method must be an object"):
+        brand.validate_new_brand(brand_doc(assessment=report).decode())
+
+
+async def test_malformed_capture_pair_fails_once_without_retries(publication_db):
+    from dataclasses import replace
+
+    from temporalio.exceptions import ApplicationError
+
+    f = await setup(publication_db)
+    run = await start(f, product_url="https://example.com/")
+    prepared = await f.sources.prepare(run, f.procedure)
+    base = prepared["project_revision"]
+    run = replace(run, expected_head_sha=base)
+    procedure = f.procedure.resolve_inputs(run.input, run_id=run.id)
+    activities = TinActivities(
+        database=f.db,
+        storage=f.storage,
+        settings=f.settings,
+        sandboxes=SimpleNamespace(),
+        integrations=f.runtime.integrations,
+    )
+    variant = {**ASSESSMENT, "method": {"kind": "packet_only"}}
+    revision = f.storage.repo.edit(
+        {procedure.output_path: brand_doc(assessment=variant), procedure.companion_path: DESIGN}
+    )
+    f.storage.repo.head = base
+    assert await activities._procedure_companions(run, f.project, procedure, revision)
+    malformed = {**ASSESSMENT, "method": "visual_capture"}
+    revision = f.storage.repo.edit(
+        {procedure.output_path: brand_doc(assessment=malformed), procedure.companion_path: DESIGN}
+    )
+    f.storage.repo.head = base
+    with pytest.raises(ApplicationError, match="method must be an object") as failed:
+        await activities._procedure_companions(run, f.project, procedure, revision)
+    assert failed.value.non_retryable and failed.value.type == "BrandCaptureInvalid"

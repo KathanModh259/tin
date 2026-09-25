@@ -1,7 +1,9 @@
 """First capture preparation and preservation, over ordinary project files and receipts."""
 
 import hashlib
+import logging
 import re
+from functools import partial
 from urllib.parse import urlsplit
 
 from tin_lite import brand_contract as contract
@@ -11,6 +13,7 @@ from tin_lite.project_files import safe_project_file_path
 
 PACKET_MAX = 32_000
 PREPARATION = "brand_capture_preparation"
+logger = logging.getLogger(__name__)
 
 
 def public_url(value):
@@ -82,7 +85,7 @@ async def resolve_brand(storage, project, revision):
         result["diagnostics"].append(str(exc))
         return result
     try:
-        result["assessment"] = contract.assessment(result["guide"])
+        result["assessment"] = contract.assessment(result["guide"], notes=result["diagnostics"])
     except ValueError:
         result["diagnostics"].append(
             "Optional brand assessment is unavailable; the guide is valid."
@@ -225,8 +228,14 @@ class BrandCaptureSources:
 async def validate_pair(storage, project, run, brand, design):
     """New files use the contract; any existing destination must be carried byte-for-byte."""
     generated_sources = []
+    notes: list[str] = []
     for path, raw, limit, validate_new in (
-        (contract.BRAND_PATH, brand, contract.BRAND_MAX, contract.validate_new_brand),
+        (
+            contract.BRAND_PATH,
+            brand,
+            contract.BRAND_MAX,
+            partial(contract.validate_new_brand, notes=notes),
+        ),
         (contract.DESIGN_PATH, design, contract.DESIGN_MAX, contract.validate_new_design),
     ):
         validate_document(raw, limit)
@@ -250,3 +259,6 @@ async def validate_pair(storage, project, run, brand, design):
             for k in brand_sources.keys() & design_sources.keys()
         ):
             raise ValueError("The same source ID cannot identify different sources across the pair")
+    for note in notes:
+        logger.info("brand capture run %s: %s", run.id, note)
+    return notes
