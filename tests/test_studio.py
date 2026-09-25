@@ -528,6 +528,21 @@ def test_render_plays_a_type_step_line_on_its_focus_keyframe(
     assert total == pytest.approx(4.39)
 
 
+def test_render_stretches_a_hold_step_until_its_line_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    render = _load_studio_tool("render", monkeypatch)
+    log = {
+        "steps": [{"idx": 0, "kind": "goto", "hold": 1200}, {"idx": 1, "kind": "hold", "hold": 500}]
+    }
+    vo = {"clips": [{"step_idx": 1, "duration": 4.0, "words": []}]}
+    segs, total, audio = render.build_timeline(log, vo)
+    holds = {seg["key"]["idx"]: seg for seg in segs if seg["kind"] == "hold"}
+    assert [(round(start, 2), clip["step_idx"]) for start, clip in audio] == [(1.87, 1)]
+    assert holds[1]["start"] + holds[1]["dur"] >= 1.87 + 4.0
+    assert total == pytest.approx(6.2)
+
+
 def test_e2b_runtime_selects_the_studio_template_and_flags_the_profile() -> None:
     runtime = E2BRuntime(
         api_key="k",

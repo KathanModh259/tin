@@ -353,7 +353,7 @@ def build_timeline(log, vo=None):
             prev = steps[i - 1]
             segs.append(dict(kind="cut", start=t, dur=0.12, prev=prev, key=s))
             t += 0.12
-            hold = hold_for(s, 0.12) if kind == "focus" else s.get("hold", 300) / 1000
+            hold = hold_for(s, 0.12) if kind in CONTENT_KINDS else s.get("hold", 300) / 1000
             segs.append(dict(kind="hold", start=t, dur=hold, key=s))
             t += hold
         if s["idx"] in clips and kind in CONTENT_KINDS:
