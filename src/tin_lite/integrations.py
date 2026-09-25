@@ -123,6 +123,7 @@ WORKSPACE_DEFAULT_CAPABILITIES = (
     "gmail.messages.send",
     "calendar.events.read",
 )
+GITHUB_REPOSITORY_PAGE_LIMIT = 10
 GITHUB_OPEN_PULL_REQUEST_LIMIT = 20
 GITHUB_OPEN_PULL_REQUEST_FILE_LIMIT = 100
 GITHUB_OPEN_PULL_REQUEST_EVIDENCE_MAX_BYTES = 250_000
@@ -1155,22 +1156,31 @@ class IntegrationService:
         token = await self._github_installation_token(installation_id)
         execution_key = f"integration:{uuid4()}"
         fingerprint = _sha256(f"{project_id}:{GITHUB_PROVIDER}:repositories.list")
+        options: list[ProviderOption] = []
+        truncated = False
         try:
-            response = await self._client.get(
-                "https://api.github.com/installation/repositories?per_page=100",
-                headers=self._github_headers(token),
-            )
-            payload = _provider_json(response, provider="GitHub")
-            repositories = payload.get("repositories", [])
-            options = [
-                ProviderOption(
-                    id=str(item["full_name"]),
-                    label=str(item["full_name"]),
-                    detail=("private" if item.get("private") else "public"),
+            # GitHub pages installation repositories at 100; follow a bounded number of pages.
+            for page in range(1, GITHUB_REPOSITORY_PAGE_LIMIT + 1):
+                response = await self._client.get(
+                    "https://api.github.com/installation/repositories",
+                    headers=self._github_headers(token),
+                    params={"per_page": 100, "page": page},
                 )
-                for item in repositories
-                if isinstance(item, dict) and item.get("full_name")
-            ]
+                payload = _provider_json(response, provider="GitHub")
+                repositories = payload.get("repositories", [])
+                options.extend(
+                    ProviderOption(
+                        id=str(item["full_name"]),
+                        label=str(item["full_name"]),
+                        detail=("private" if item.get("private") else "public"),
+                    )
+                    for item in repositories
+                    if isinstance(item, dict) and item.get("full_name")
+                )
+                if not _github_has_next_page(response):
+                    break
+            else:
+                truncated = True
             options.sort(key=lambda option: option.label.casefold())
         except IntegrationError:
             await self._database.record_integration_call(
@@ -1192,7 +1202,7 @@ class IntegrationService:
             capability="repositories.list",
             request_fingerprint=fingerprint,
             status="completed",
-            response_summary={"count": len(options)},
+            response_summary={"count": len(options), "truncated": truncated},
             provider_request_id=response.headers.get("x-github-request-id"),
         )
         return options

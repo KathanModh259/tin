@@ -2700,6 +2700,38 @@ async def test_repository_bundle_ignores_members_outside_the_pinned_tree(monkeyp
         assert archive.getnames() == ["README.md"]
 
 
+async def test_github_repositories_follow_every_installation_page(monkeypatch):
+    names = [f"example-org/repo-{index:03d}" for index in range(1, 151)]
+    requests: list[httpx.Request] = []
+
+    async def github(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.url.path == "/installation/repositories"
+        page = int(request.url.params.get("page", "1"))
+        per_page = int(request.url.params["per_page"])
+        chunk = names[(page - 1) * per_page : page * per_page]
+        headers = {}
+        if page * per_page < len(names):
+            headers["link"] = (
+                f'<https://api.github.com/installation/repositories?page={page + 1}>; rel="next"'
+            )
+        return httpx.Response(
+            200,
+            headers=headers,
+            json={
+                "total_count": len(names),
+                "repositories": [{"full_name": name, "private": True} for name in chunk],
+            },
+        )
+
+    async with repository_service(monkeypatch, github) as service:
+        options = await service.github_repositories(project_id=PROJECT_ID)
+        receipt = service._database.calls[-1]
+    assert [option.id for option in options] == names
+    assert len(requests) == 2
+    assert receipt["response_summary"] == {"count": 150, "truncated": False}
+
+
 # ---------------------------------------------------------------- Google Ads (ads.google)
 
 ADS_CID = "1234567890"
