@@ -1785,6 +1785,11 @@ class Database:
     ) -> ProjectWorkflow:
         project_workflow_id = uuid4()
         async with self.pool.acquire() as conn, conn.transaction():
+            if not await conn.fetchval(
+                "SELECT true FROM projects WHERE id = $1 AND deleted_at IS NULL FOR SHARE",
+                project_id,
+            ):
+                raise LookupError(f"project {project_id} does not exist")
             workflow = await conn.fetchrow(
                 """
                 SELECT * FROM workflows
@@ -2239,8 +2244,10 @@ class Database:
                     "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
                     f"content-program:{UUID(input_payload['program_id'])}",
                 )
+            # Deletion tombstones under the same row lock, so admission never outlives it.
             exists = await conn.fetchval(
-                "SELECT true FROM projects WHERE id = $1 FOR UPDATE", project_id
+                "SELECT true FROM projects WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+                project_id,
             )
             if not exists:
                 raise LookupError(f"project {project_id} does not exist")

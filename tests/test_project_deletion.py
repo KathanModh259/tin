@@ -372,6 +372,34 @@ async def test_a_retry_closes_the_executions_and_sandboxes_a_failed_attempt_left
     f.runtime.sandboxes.kill.assert_awaited_once_with("sbx-1")
 
 
+async def test_nothing_new_is_admitted_into_a_deleted_project(publication_db):
+    f = await fixture(publication_db)
+    work = await seed_work(f)
+    await delete_project(f.runtime, project_id=f.project.id, actor=ACTOR, request_id=uuid4())
+    workflow_id = await f.db.pool.fetchval(
+        "SELECT workflow_id FROM workflow_runs WHERE id=$1", work.run_id
+    )
+
+    with pytest.raises(LookupError, match="does not exist"):
+        await f.db.create_run(
+            project_id=f.project.id, workflow_id=workflow_id, started_by_clerk_user_id=ACTOR
+        )
+    with pytest.raises(LookupError, match="does not exist"):
+        await f.db.create_project_workflow(
+            project_id=f.project.id,
+            workflow_id=workflow_id,
+            definition_commit_sha="d" * 40,
+            name="Late research",
+            inputs={},
+            input_schema={},
+            schedule=None,
+            request_id=uuid4(),
+            created_by_clerk_user_id=ACTOR,
+        )
+    assert await count(f.db, "workflow_runs", f.project.id) == 1
+    assert await count(f.db, "project_workflows", f.project.id) == 1
+
+
 async def test_already_closed_temporal_and_storage_state_is_tolerated(publication_db):
     f = await fixture(publication_db)
     await seed_work(f)
