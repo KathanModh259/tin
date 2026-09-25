@@ -2848,6 +2848,19 @@ class Database:
             raise RuntimeError("task changes are not waiting for approval")
         return _run(row)
 
+    async def reopen_task_review(self, *, run_id: UUID) -> None:
+        """Return an approval whose signal was not accepted to review, unless it moved on."""
+        await self.pool.execute(
+            """
+            UPDATE workflow_runs
+            SET status = 'needs_input', task_phase = 'review'
+            WHERE id = $1 AND executor = 'project.task'
+              AND status = 'running' AND task_phase = 'applying'
+              AND review_decision IS NULL
+            """,
+            run_id,
+        )
+
     async def defer_task_approval(self, *, run_id: UUID, summary: str) -> None:
         async with self.pool.acquire() as conn, conn.transaction():
             row = await conn.fetchrow(
