@@ -157,6 +157,39 @@ async def test_dashboard_refund_failing_after_success_restores_credits(billed):
     assert await f.db.pool.fetchval("SELECT count(*) FROM billing_ledger") == 3
 
 
+async def test_closed_dispute_inquiry_restores_credits(billed):
+    f = billed
+    f.settings.codex_api_projects = {f.project.id}
+    payment, _ = await fund(f, 2500)
+    obj = {
+        "id": "dp_inquiry",
+        "currency": "usd",
+        "amount": 2500,
+        "payment_intent": f"pi_{payment['id']}",
+        "status": "warning_needs_response",
+    }
+    created = {
+        "id": "evt_inquiry_created",
+        "type": "charge.dispute.created",
+        "livemode": False,
+        "data": {"object": obj},
+    }
+    await f.payments.handle_event(created)
+    assert (await f.billing.overview(f.project.id, ACTOR))["available_usd"] == "0.00"
+    closed = {
+        **created,
+        "id": "evt_inquiry_closed",
+        "type": "charge.dispute.closed",
+        "data": {"object": {**obj, "status": "warning_closed"}},
+    }
+    await f.payments.handle_event(closed)
+    await f.payments.handle_event({**closed, "id": "evt_inquiry_closed_again"})
+    view = await f.billing.overview(f.project.id, ACTOR)
+    assert view["available_usd"] == "25.00" and view["status"] == "suspended"
+    assert await f.db.pool.fetchval("SELECT status FROM billing_disputes") == "won"
+    assert await f.db.pool.fetchval("SELECT count(*) FROM billing_ledger") == 3
+
+
 async def test_dispute_closed_before_created_is_idempotent(billed):
     f = billed
     f.settings.codex_api_projects = {f.project.id}

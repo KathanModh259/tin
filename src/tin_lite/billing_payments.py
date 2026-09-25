@@ -663,6 +663,9 @@ class StripePayments:
         if prior and prior["status"] in {"won", "lost"}:
             return
         status = obj.get("status") if obj.get("status") in {"won", "lost"} else "open"
+        if obj.get("status") == "warning_closed":
+            # An inquiry that closes without a chargeback never withdrew the funds.
+            status = "won"
         if not prior:
             await self.billing.post_ledger(
                 conn,
