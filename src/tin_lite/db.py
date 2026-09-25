@@ -3072,6 +3072,20 @@ class Database:
         )
         return _run(row) if row else None
 
+    async def latest_active_run(self, *, project_id: UUID, executor: str) -> WorkflowRun | None:
+        row = await self.pool.fetchrow(
+            """
+            SELECT * FROM workflow_runs
+            WHERE project_id = $1 AND executor = $2
+              AND status IN ('pending', 'running', 'needs_input')
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            project_id,
+            executor,
+        )
+        return _run(row) if row else None
+
     async def list_runs(self, *, project_id: UUID, limit: int = 100) -> list[WorkflowRun]:
         rows = await self.pool.fetch(
             """

@@ -17,7 +17,7 @@ from test_procedure_publication import publication_db as publication_db
 
 from tin_lite.billing_contracts import BillingError, final_charge
 from tin_lite.codex_api import CONTRACT, PROCEDURE_CONTRACT, SESSION_CONTRACT
-from tin_lite.codex_api_pricing import RATE_CARD, api_terms, price_response
+from tin_lite.codex_api_pricing import RATE_CARD, api_terms, isolated_v1_terms, price_response
 from tin_lite.codex_api_relay import request_body
 from tin_lite.workflow_costs import configured_terms, session_funded
 
@@ -255,11 +255,10 @@ async def test_issued_private_v1_quotes_keep_their_limits_and_funding(billed, wh
     await fund(f)
     f.settings.codex_api_projects = {f.project.id}
     q = await quote(f)
-    terms = f.billing.terms(
+    terms = configured_terms(
+        isolated_v1_terms(api_terms(f.workflow.definition)),
         f.workflow.definition,
-        f.project.id,
         {"brief": "Explain the public docs"},
-        session_budget=False,
     )
     if whole_run:
         terms.pop("funding")

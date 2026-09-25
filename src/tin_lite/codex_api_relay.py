@@ -49,6 +49,17 @@ class AdmissionStopped(HTTPException):
         self.key, self.reason = key, reason
 
 
+class RelayRejected(HTTPException):
+    """A fixed rejection that also names an allowlisted reason for operator logs."""
+
+    def __init__(self, status, detail, *, reason):
+        super().__init__(status, detail)
+        self.reason = reason
+
+
+CONTRACT_REJECTION = "This API request exceeds its reserved execution contract"
+
+
 def web_usage(output, protocol):
     if not isinstance(output, list):
         return {"web_search_calls": None}
@@ -339,12 +350,13 @@ class CodexAPIRelay:
                 or budget.get("pricing") != record.get("pricing")
             ):
                 raise HTTPException(403, "Codex API execution requires its reserved credit budget")
-            if enrolled and (
-                operation != "responses"
-                or request_bytes > budget["request_maximum_input_bytes"]
-                or budget.get("codex_contract", CONTRACT) != contract
-            ):
-                raise HTTPException(422, "This API request exceeds its reserved execution contract")
+            if enrolled:
+                if operation != "responses":
+                    raise RelayRejected(422, CONTRACT_REJECTION, reason="operation_not_allowed")
+                if request_bytes > budget["request_maximum_input_bytes"]:
+                    raise RelayRejected(422, CONTRACT_REJECTION, reason="request_too_large")
+                if budget.get("codex_contract", CONTRACT) != contract:
+                    raise RelayRejected(422, CONTRACT_REJECTION, reason="contract_mismatch")
             if await conn.fetchval(
                 "SELECT EXISTS(SELECT 1 FROM effect_receipts WHERE execution_key=$1)", key
             ):

@@ -49,14 +49,8 @@ async def test_profile_selection_is_scoped_and_old_oauth_stays_oauth(publication
             procedure=SimpleNamespace(sandbox=sandbox),
             settings=settings,
         )
-    expected = (
-        PROCEDURE_CONTRACT
-        if profile in {"default", "browser", "studio"}
-        else CONTRACT
-        if profile == "isolated"
-        else {"mode": "chatgpt_oauth"}
-    )
-    assert selected == expected
+    # Unpinned API runs of every supported profile, isolated included, use v3.
+    assert selected == PROCEDURE_CONTRACT
     effective = execution_profile(sandbox, selected)
     assert effective.timeout_seconds == 1200
     assert effective.profile == (
@@ -513,7 +507,9 @@ def test_remote_compaction_is_not_priced_from_invented_supplier_fields():
     assert price_response(RATE_CARD, {**record, "model": "different"}) is None
     assert price_response(RATE_CARD, {**record, "service_tier": "priority"}) is None
     assert price_response(RATE_CARD, {**record, "response_object": None}) is None
-    assert "codex_contract" not in api_terms({"procedure": {"sandbox": {"profile": "isolated"}}})
+    isolated = api_terms({"procedure": {"sandbox": {"profile": "isolated"}}})
+    assert isolated["codex_contract"] == PROCEDURE_CONTRACT
+    assert isolated["request_maximum_input_bytes"] == PROCEDURE_CONTRACT["max_request_bytes"]
     assert api_terms({"procedure": {}})["codex_contract"] == PROCEDURE_CONTRACT
 
 

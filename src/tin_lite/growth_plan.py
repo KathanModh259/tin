@@ -15,6 +15,7 @@ from pathlib import Path
 
 from tin_lite.growth_plan_assets import score as scorer
 from tin_lite.model_providers import ModelCapability, ModelRoute, ProviderName
+from tin_lite.workflow_inputs import coerce_schema_inputs
 
 KEY = "growth.onboarding_plan"
 ASSETS = Path(__file__).parent / "growth_plan_assets"
@@ -479,9 +480,12 @@ def validate_system(item, avail, inputs):
         values = {
             i["name"]: i["value"] for i in w["inputs"] if i["name"] in known and i["value"].strip()
         }
+        # The model writes every value as text; type numbers, booleans and lists by the schema.
+        values, typed = coerce_schema_inputs(spec.get("input_schema", {}), values)
+        notes.extend(f"{w['key']}: {note}" for note in typed)
         for name, prop in (spec.get("input_schema", {}).get("properties") or {}).items():
             value = values.get(name)
-            if value is None or not isinstance(prop, dict):
+            if not isinstance(value, str) or not isinstance(prop, dict):
                 continue
             limit = prop.get("maxLength")
             if prop.get("enum") and value not in prop["enum"]:

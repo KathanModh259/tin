@@ -601,6 +601,22 @@ class BillingService:
                 terms = self.terms(
                     definition, run["project_id"], object_value(run["input"]), session_budget=False
                 )
+            # A still-valid quote issued before isolated procedures joined v3 keeps v1.
+            from tin_lite.codex_api_pricing import isolated_v1_terms, issued_before_isolated_v3
+
+            if quoted_terms and issued_before_isolated_v3(quoted_terms, terms, definition):
+                terms = configured_terms(
+                    isolated_v1_terms(
+                        self._terms(
+                            definition,
+                            run["project_id"],
+                            object_value(run["input"]),
+                            session_budget=False,
+                        )
+                    ),
+                    definition,
+                    object_value(run["input"]),
+                )
             # Previously issued quotes preserve their whole-run funding contract.
             if quoted_terms and "funding" not in quoted_terms:
                 expected = {k: v for k, v in terms.items() if k not in {"funding", "estimate"}}

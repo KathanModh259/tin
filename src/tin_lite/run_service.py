@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 from uuid import UUID
 
@@ -33,6 +34,8 @@ from tin_lite.workflow_definitions import resolve_execution_contract
 from tin_lite.workflow_inputs import WorkflowInputError, normalize_workflow_inputs
 from tin_lite.workflow_prerequisites import PrerequisiteError, evaluate_prerequisites
 from tin_lite.workflows import registered_workflow_implementations
+
+logger = logging.getLogger(__name__)
 
 
 class WorkflowExecutorUnavailableError(RuntimeError):
@@ -446,4 +449,14 @@ async def start_workflow_run(
             error_message="TemporalStartError: workflow did not start",
         )
         raise TemporalStartError(run.id) from exc
+    if created and workflow.executor == "growth.onboarding":
+        # Only a newly created, dispatched run replaces earlier unapproved ones; a replayed
+        # start key returns its existing run and supersedes nothing.
+        from tin_lite.growth_onboarding_control import supersede_earlier_onboarding
+
+        try:
+            await supersede_earlier_onboarding(runtime=runtime, run=run)
+        except Exception:
+            # The new run is already dispatched; an older one simply stays as it was.
+            logger.exception("Could not supersede earlier onboarding runs for %s", run.id)
     return run

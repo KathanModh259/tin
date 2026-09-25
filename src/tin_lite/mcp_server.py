@@ -1541,12 +1541,19 @@ def create_mcp_app(
         await require_project(parsed_project_id, token, tool_name="get_started")
         project = await runtime().database.get_project(parsed_project_id)
         onboarding = await runtime().database.get_registry_workflow(growth_onboarding.KEY)
+        # An onboarding already in flight is the one to continue, not a reason to restart.
+        active = await runtime().database.latest_active_run(
+            project_id=parsed_project_id, executor=growth_onboarding.KEY
+        )
         experience = await onboarding_experience(
             database=runtime().database,
             storage=runtime().storage,
             settings=settings,
             project_id=parsed_project_id,
+            run=active,
         )
+        if active is not None:
+            experience["active_run_id"] = str(active.id)
         from tin_lite.onboarding import billing_restrictions
 
         blocked = await billing_restrictions(

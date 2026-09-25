@@ -88,7 +88,8 @@ background execution, remote tools and arbitrary upstream routing are not suppor
 When a stop happens, the attempt names its cause. The relay records budget, request and
 token stops. The controller's observed-token stop is recorded as `token_limit` from its
 own usage frame. The relay logs each rejection with run, operation, status and reason
-code, and only the status of an upstream rejection. It never logs request or provider
+code (a 422 contract rejection names `operation_not_allowed`, `request_too_large` or
+`contract_mismatch`), and only the status of an upstream rejection. It never logs request or provider
 bodies. The controller also prints each agent narration line (not the structured result)
 as a bounded `TIN_CODEX_PROGRESS` frame. The switchboard redacts run secrets and projects
 the latest line to the run's `progress_summary` in Postgres, unless product code owns the
@@ -100,8 +101,10 @@ Historical default-profile procedures selected **`tin-codex-api-v3`**: 64 reques
 bodies, 8,192 output tokens per response, 128,000 configured context tokens, automatic
 compaction at 96,000, and a stop after 2,000,000 observed cumulative tokens. Both server
 and controller use the pinned contract. These are bounded operating limits, not a promise
-that every procedure can finish within them or its credit ceiling. Existing isolated v1
-quotes and receipts retain their original limits; changing flags cannot upgrade them.
+that every procedure can finish within them or its credit ceiling. Isolated procedures
+admitted without a session budget (included onboarding children, child budgets and
+qualification) also select v3 for new admissions. Existing isolated v1 quotes, pinned
+budgets and receipts retain their original limits; changing flags cannot upgrade them.
 V3 keeps v2's context/usage limits but omits `max_tool_calls`, allowing the model to
 search, open pages and follow up within one response. Already admitted v1/v2 runs
 retain their one-call ceiling. Run timeouts and credit reservations still apply;

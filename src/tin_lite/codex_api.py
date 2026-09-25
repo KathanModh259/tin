@@ -207,11 +207,7 @@ async def select_contract(*, db, conn, run, procedure, settings):
         if not is_api_contract(contract):
             raise ValueError("Unknown reserved Codex execution contract")
     else:
-        contract = (
-            CONTRACT
-            if procedure.sandbox.isolated
-            else procedure_contract(getattr(procedure, "output_validator", None))
-        )
+        contract = procedure_contract(getattr(procedure, "output_validator", None))
     execution_profile(procedure.sandbox, contract)
     return dict(contract)
 
