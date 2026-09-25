@@ -546,6 +546,25 @@ async def test_a_view_that_skips_a_request_is_asked_again_under_its_own_step():
     assert "Delivered by Organic search content" in result["plan"]
 
 
+async def test_an_unusable_request_re_ask_keeps_the_original_view():
+    model = FakeModel(
+        overrides={"view": lambda value, user: dict(value, requests=[])},
+        unusable=["view:requests", "view:requests:retry"],
+    )
+    asked = {}
+
+    async def recording(step, system, user, *args):
+        asked[step] = user
+        return await model(step, system, user, *args)
+
+    result = await plan.build_plan(inputs(), SITE, SITE_TEXT, TODAY, recording)
+    # The re-ask is best-effort: one extra request at most, and the valid first view stands.
+    assert model.calls.count("view:requests") == 1 and "view:requests:retry" not in model.calls
+    assert "UNANSWERED REQUESTS" in asked["view:requests"] and "[0]" in asked["view:requests"]
+    assert result["report"]["unanswered_requests"] == [0]
+    assert result["report"]["retried_steps"] == []
+
+
 async def test_two_unusable_results_fail_the_run_and_save_nothing():
     with pytest.raises(plan.UnusableModelResult):
         await plan.build_plan(
@@ -814,7 +833,7 @@ def step_of(schema_name):
     name = schema_name.removeprefix("growth_plan_")
     retry = name.endswith("_retry")
     name = name.removesuffix("_retry")
-    for prefix in ("system", "rewrite", "repair"):
+    for prefix in ("system", "rewrite", "repair", "view"):
         if name.startswith(prefix + "_"):
             name = f"{prefix}:{name[len(prefix) + 1 :]}"
     return name + (":retry" if retry else "")
