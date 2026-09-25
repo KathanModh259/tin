@@ -4174,13 +4174,17 @@ class Database:
             )
             timezone = ZoneInfo(row["send_timezone"])
             local_now = current.astimezone(timezone)
-            window_start = datetime.combine(local_now.date(), row["send_window_start"], timezone)
-            window_end = datetime.combine(local_now.date(), row["send_window_end"], timezone)
-            # Waits subtract from UTC: same-zone subtraction is wall-clock and gains an hour
-            # across a spring-forward change.
-            if local_now < window_start:
+            # Compare and subtract UTC instants: same-zone arithmetic is wall-clock, which gains
+            # an hour across spring-forward and is ambiguous in the repeated fall-back hour.
+            window_start = datetime.combine(
+                local_now.date(), row["send_window_start"], timezone
+            ).astimezone(UTC)
+            window_end = datetime.combine(
+                local_now.date(), row["send_window_end"], timezone
+            ).astimezone(UTC)
+            if current < window_start:
                 return await defer(max(1, math.ceil((window_start - current).total_seconds())))
-            if local_now >= window_end:
+            if current >= window_end:
                 next_start = datetime.combine(
                     local_now.date() + timedelta(days=1),
                     row["send_window_start"],

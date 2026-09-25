@@ -128,6 +128,12 @@ async def test_given_schedule_replaces_the_saved_one(harness) -> None:
             datetime(2026, 9, 29, 1, 30, tzinfo=UTC),
             "2026-09-28",
         ),
+        # A stored zone that no longer resolves keeps the UTC date instead of failing the call.
+        (
+            {**WEEKLY, "timezone": "Eastern Standard Time"},
+            datetime(2026, 9, 27, 23, tzinfo=UTC),
+            "2026-09-27",
+        ),
     ],
 )
 def test_relay_names_the_next_run_date_in_the_schedule_timezone(schedule, next_run_at, day) -> None:

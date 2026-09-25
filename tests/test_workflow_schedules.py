@@ -634,9 +634,15 @@ async def test_my_system_skip_and_remove_controls_are_project_scoped() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resync_and_resume_keep_an_armed_skip_off_the_next_run() -> None:
+async def test_resync_and_resume_keep_an_armed_skip_off_the_next_run(monkeypatch) -> None:
     schedule = WorkflowSchedule(cadence="daily", local_time="09:00", timezone="UTC")
-    skipped_for = next_run_after(schedule)
+    # Pin the clock: Monday 07:00, before the skipped 09:00 run.
+    now = datetime(2026, 9, 28, 7, tzinfo=UTC)
+    monkeypatch.setattr(
+        "tin_lite.project_workflow_operations.next_run_after",
+        lambda schedule, after=None: next_run_after(schedule, after or now),
+    )
+    skipped_for = next_run_after(schedule, now)
     created_at = datetime(2026, 9, 4, tzinfo=UTC)
     configured = ProjectWorkflow(
         id=uuid4(),
@@ -666,7 +672,8 @@ async def test_resync_and_resume_keep_an_armed_skip_off_the_next_run() -> None:
     )
 
     class Database:
-        synced: list[datetime | None] = []
+        def __init__(self) -> None:
+            self.synced: list[datetime | None] = []
 
         async def project_workflow_synced(self, **values):
             self.synced.append(values["next_run_at"])

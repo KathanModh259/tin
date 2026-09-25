@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from mcp.server import MCPServer
 from mcp.server.auth.middleware.auth_context import get_access_token
@@ -324,10 +324,14 @@ def _project_workflow_message(configured: Any, *, created: bool) -> str:
     next_run_at = getattr(configured, "next_run_at", None)
     first = ""
     if next_run_at is not None and hasattr(next_run_at, "isoformat"):
-        # next_run_at is UTC; name the date where the weekday and local time apply.
+        # next_run_at is UTC; name the date where the weekday and local time apply. A stored
+        # zone that no longer resolves keeps the UTC date rather than failing the reply.
         data = schedule.model_dump() if hasattr(schedule, "model_dump") else dict(schedule or {})
-        if data.get("timezone"):
-            next_run_at = next_run_at.astimezone(ZoneInfo(data["timezone"]))
+        try:
+            if data.get("timezone"):
+                next_run_at = next_run_at.astimezone(ZoneInfo(str(data["timezone"])))
+        except (ZoneInfoNotFoundError, ValueError):
+            pass
         first = f"; the next run is {next_run_at.date().isoformat()}"
     verb = "is now on your calendar" if created else "is updated"
     name = getattr(configured, "name", None) or getattr(configured, "workflow_key", "The workflow")
