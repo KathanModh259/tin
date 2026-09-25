@@ -4176,15 +4176,17 @@ class Database:
             local_now = current.astimezone(timezone)
             window_start = datetime.combine(local_now.date(), row["send_window_start"], timezone)
             window_end = datetime.combine(local_now.date(), row["send_window_end"], timezone)
+            # Waits subtract from UTC: same-zone subtraction is wall-clock and gains an hour
+            # across a spring-forward change.
             if local_now < window_start:
-                return await defer(max(1, math.ceil((window_start - local_now).total_seconds())))
+                return await defer(max(1, math.ceil((window_start - current).total_seconds())))
             if local_now >= window_end:
                 next_start = datetime.combine(
                     local_now.date() + timedelta(days=1),
                     row["send_window_start"],
                     timezone,
                 )
-                return await defer(max(1, math.ceil((next_start - local_now).total_seconds())))
+                return await defer(max(1, math.ceil((next_start - current).total_seconds())))
             day_start = datetime.combine(local_now.date(), time.min, timezone).astimezone(UTC)
             day_end = datetime.combine(
                 local_now.date() + timedelta(days=1), time.min, timezone
@@ -4210,7 +4212,7 @@ class Database:
                     row["send_window_start"],
                     timezone,
                 )
-                return await defer(max(1, math.ceil((next_start - local_now).total_seconds())))
+                return await defer(max(1, math.ceil((next_start - current).total_seconds())))
             last_started_at = await conn.fetchval(
                 """
                 SELECT max(delivery.started_at)
