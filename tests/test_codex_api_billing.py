@@ -26,7 +26,13 @@ from tin_lite.codex_api import (
     select_contract,
     token_hash,
 )
-from tin_lite.codex_api_pricing import RATE_CARD, REQUEST_MAXIMUM, api_terms, price_response
+from tin_lite.codex_api_pricing import (
+    RATE_CARD,
+    REQUEST_MAXIMUM,
+    api_terms,
+    isolated_v1_terms,
+    price_response,
+)
 from tin_lite.codex_api_relay import CodexAPIRelay, router
 from tin_lite.procedures import SandboxProfile
 from tin_lite.run_usage import read_run_usage
@@ -96,8 +102,9 @@ async def paid_relay(
     if contract != SESSION_CONTRACT and q["terms"].get("codex_contract") == SESSION_CONTRACT:
         # These fixtures model already-issued v1/v3 quotes. Keep their old funding
         # and execution pins rather than quietly upgrading the tests to v4.
+        terms = api_terms(f.workflow.definition)
         q["terms"] = configured_terms(
-            api_terms(f.workflow.definition),
+            isolated_v1_terms(terms) if contract == CONTRACT else terms,
             f.workflow.definition,
             {"brief": "Explain the public docs"},
         )
@@ -248,12 +255,40 @@ async def test_reconciliation_repairs_projection_gap_without_repurchase(billed):
         await relay.close()
 
 
-async def test_budget_context_and_compaction_bounds_before_dispatch(billed):
+async def test_budget_context_and_compaction_bounds_before_dispatch(billed, caplog):
     f = billed
     run, relay, client, sent = await paid_relay(f)
     try:
-        assert (await post(client, run, {**BODY, "input": "x" * 100001})).status_code == 422
-        assert (await post(client, run, operation="responses/compact")).status_code == 422
+        # A pinned v1 isolated run keeps its 100,000-byte request envelope.
+        with caplog.at_level("WARNING", logger="tin_lite.codex_api_relay"):
+            assert (await post(client, run, {**BODY, "input": "x" * 100001})).status_code == 422
+            assert (await post(client, run, operation="responses/compact")).status_code == 422
+            terms = json.loads(
+                await f.db.pool.fetchval(
+                    "SELECT terms FROM billing_run_budgets WHERE run_id=$1", run.id
+                )
+            )
+            await f.db.pool.execute(
+                "UPDATE billing_run_budgets SET terms=$2::jsonb WHERE run_id=$1",
+                run.id,
+                json.dumps({**terms, "codex_contract": SESSION_CONTRACT}),
+            )
+            response = await post(client, run)
+            assert response.status_code == 422
+            assert response.json()["detail"] == (
+                "This API request exceeds its reserved execution contract"
+            )
+            await f.db.pool.execute(
+                "UPDATE billing_run_budgets SET terms=$2::jsonb WHERE run_id=$1",
+                run.id,
+                json.dumps(terms),
+            )
+        reasons = [
+            r.getMessage().split("reason=")[1].split()[0]
+            for r in caplog.records
+            if r.name == "tin_lite.codex_api_relay"
+        ]
+        assert reasons == ["request_too_large", "operation_not_allowed", "contract_mismatch"]
         await f.db.pool.execute(
             "UPDATE billing_run_budgets SET committed_nanos=$2 WHERE run_id=$1",
             run.id,

@@ -1,6 +1,7 @@
 """Calls an agent can copy directly from onboarding; no external services."""
 
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
@@ -276,3 +277,82 @@ async def test_posthog_connects_through_oauth_and_names_the_project_choice(accou
     )
     assert batch["url"].endswith("&providers=analytics.posthog,payments.stripe")
     assert "PostHog asks which project" in batch["relay"][0]
+
+
+async def test_a_new_onboarding_supersedes_only_earlier_unapproved_runs(account):
+    """Agents restart onboarding after a correction; the earlier run must not wait forever."""
+    f = account
+    handle = SimpleNamespace(cancel=AsyncMock())
+    f.runtime.temporal.get_workflow_handle = Mock(return_value=handle)
+    workflow = await install(f, "growth.onboarding")
+
+    async def start(request_id):
+        started = await call(
+            f,
+            "start_workflow",
+            project_id=str(f.project.id),
+            workflow_id=workflow.key,
+            inputs={"product_url": "https://example.com/"},
+            request_id=request_id,
+        )
+        return UUID(started["id"])
+
+    async def status(run_id):
+        return await f.db.pool.fetchval("SELECT status FROM workflow_runs WHERE id=$1", run_id)
+
+    first = await start(str(uuid4()))
+    # The first run waits for picks; its plan child is still pending.
+    await f.db.pool.execute(
+        "UPDATE workflow_runs SET status='running', review_required=true WHERE id=$1", first
+    )
+    await f.db.request_human_review(
+        run_id=first,
+        canonical_commit_sha="a" * 40,
+        artifact_ref="code.storage://repo@a/reports/GROWTH_ONBOARDING_PLAN.md",
+        artifact_path="reports/GROWTH_ONBOARDING_PLAN.md",
+        summary="Pick an option.",
+    )
+    planner = await install(f, "growth.onboarding_plan")
+    plan_child, _ = await f.db.create_run(
+        project_id=f.project.id,
+        workflow_id=planner.id,
+        started_by_clerk_user_id=ACTOR,
+        start_idempotency_key=f"onboarding:{first}:plan",
+        input_payload=(await f.db.get_run(first)).input,
+        pinned_definition=planner.definition,
+        definition_commit_sha=planner.current_commit_sha,
+    )
+    view = await call(f, "get_started", project_id=str(f.project.id))
+    assert view["active_run_id"] == str(first)
+
+    second_key = str(uuid4())
+    second = await start(second_key)
+    assert await status(first) == "superseded"
+    assert await status(plan_child.id) == "superseded"
+    assert await status(second) == "pending"
+    cancelled = {c.args[0] for c in f.runtime.temporal.get_workflow_handle.call_args_list}
+    assert cancelled == {
+        (await f.db.get_run(first)).temporal_workflow_id,
+        plan_child.temporal_workflow_id,
+    }
+    assert handle.cancel.await_count == 2
+    view = await call(f, "get_started", project_id=str(f.project.id))
+    assert view["active_run_id"] == str(second)
+
+    # A replayed start returns the same run and supersedes nothing.
+    assert await start(second_key) == second
+    assert await status(second) == "pending"
+    assert handle.cancel.await_count == 2
+
+    # An approved onboarding belongs to setup, and a finished one stays finished.
+    async with f.db.pool.acquire() as conn:
+        key = f"onboarding:{second}:approved_plan"
+        await f.db.start_effect(conn, execution_key=key, operation="growth.onboarding")
+        await f.db.complete_effect(conn, execution_key=key, result={"text": "plan"})
+    third = await start(str(uuid4()))
+    assert await status(second) == "pending"
+    await f.db.pool.execute("UPDATE workflow_runs SET status='succeeded' WHERE id=$1", third)
+    await start(str(uuid4()))
+    assert await status(third) == "succeeded"
+    assert await status(second) == "pending"
+    assert handle.cancel.await_count == 2

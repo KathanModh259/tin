@@ -22,6 +22,7 @@ from tin_lite.growth_onboarding import (
     plan_readiness,
     ui_links,
 )
+from tin_lite.growth_onboarding_activities import repaired_action_inputs
 from tin_lite.integrations import registered_integrations
 from tin_lite.product_urls import dashboard_url
 from tin_lite.schedules import WorkflowSchedule
@@ -88,9 +89,20 @@ def result_links(settings: Any, run: Any) -> list[dict[str, Any]]:
 
 
 async def validate_plan(
-    *, database: Any, project_id: UUID, text: str, systems: list[str], timezone: str
+    *,
+    database: Any,
+    project_id: UUID,
+    text: str,
+    systems: list[str],
+    timezone: str,
+    run_input: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Validate exact proposed inputs and schedules before any setup side effects."""
+    """Validate the inputs setup will actually use, and schedules, before any side effects.
+
+    Setup starts each action with repaired_action_inputs (typed numbers, tidied targets,
+    out-of-set enums reset to their default); approval must judge that same value.
+    """
+
     block = plan_block(text)
     if block is None:
         return [
@@ -145,10 +157,13 @@ async def validate_plan(
             )
         else:
             try:
+                repaired, _notes = repaired_action_inputs(
+                    action, template.definition["input_schema"], run_input or {}
+                )
                 normalize_workflow_inputs(
                     schema=template.definition["input_schema"],
                     project_id=project_id,
-                    inputs=action["inputs"],
+                    inputs=repaired,
                 )
                 if action["mode"] != "once":
                     code = "invalid_schedule"
@@ -375,6 +390,7 @@ async def onboarding_experience(
                 text=text,
                 systems=systems,
                 timezone=inputs.get("timezone") or "UTC",
+                run_input=inputs,
             )
         view["setup_status"] = "waiting_for_selection"
     elif run:

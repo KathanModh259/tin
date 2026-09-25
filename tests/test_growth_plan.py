@@ -375,6 +375,88 @@ def test_workflow_inputs_are_held_to_the_input_schema():
     assert any("depth" in n for n in notes) and any("240" in n for n in notes)
 
 
+def package_schema(key):
+    path = ROOT / "workflow_packages" / key / "workflow.json"
+    return json.loads(path.read_text())["definition"]["input_schema"]
+
+
+def test_numbers_and_lists_are_typed_before_the_founder_sees_them():
+    """The model writes every input as text; the tin-plan block must carry schema types."""
+    mentions = workflow("organic.mention_backlinks", "Mention backlinks")
+    mentions.update(
+        optional_inputs=["max_mentions", "recency_days"],
+        input_schema=package_schema("organic.mention_backlinks"),
+    )
+    watch = workflow("competitor.watch", "Competitor watch")
+    watch.update(
+        optional_inputs=["competitor_urls", "max_competitors"],
+        input_schema=package_schema("competitor.watch"),
+    )
+    avail = {
+        "outreach": {"workflows": [dict(mentions, includable=True), dict(watch, includable=True)]}
+    }
+    item = {
+        "id": "outreach",
+        "workflows": [
+            {
+                "key": "organic.mention_backlinks",
+                "mode": "once",
+                "weekdays": [],
+                "local_time": "",
+                "inputs": [
+                    {"name": "max_mentions", "value": "10"},
+                    {"name": "recency_days", "value": "lots"},
+                ],
+            },
+            {
+                "key": "competitor.watch",
+                "mode": "once",
+                "weekdays": [],
+                "local_time": "",
+                "inputs": [
+                    {"name": "max_competitors", "value": "9"},
+                    {"name": "competitor_urls", "value": "https://a.example, https://b.example"},
+                ],
+            },
+        ],
+    }
+
+    kept, notes = plan.validate_system(item, avail, inputs())
+
+    assert kept[0]["inputs"] == {"max_mentions": 10}  # "lots" is dropped; the default applies.
+    assert kept[1]["inputs"] == {
+        "max_competitors": 5,
+        "competitor_urls": ["https://a.example", "https://b.example"],
+    }
+    assert any("recency_days dropped" in n for n in notes)
+    assert any("max_competitors lowered to its maximum 5" in n for n in notes)
+
+
+def test_schema_coercion_is_pure_and_bounded():
+    from tin_lite.workflow_inputs import coerce_schema_inputs
+
+    schema = {
+        "properties": {
+            "count": {"type": "integer", "minimum": 1, "maximum": 5},
+            "ratio": {"type": "number"},
+            "flag": {"type": "boolean"},
+            "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 2},
+            "name": {"type": "string"},
+        }
+    }
+    values = {"count": "0", "ratio": "2.5", "flag": "Yes", "tags": "a\nb, c", "name": "7"}
+    fixed, notes = coerce_schema_inputs(schema, values)
+    assert fixed == {"count": 1, "ratio": 2.5, "flag": True, "tags": ["a", "b"], "name": "7"}
+    assert values["count"] == "0"  # The caller's dict is not mutated.
+    assert len(notes) == 2
+    fixed, notes = coerce_schema_inputs(schema, {"count": "2.5", "flag": "maybe", "ratio": "nan"})
+    assert fixed == {} and len(notes) == 3
+    assert coerce_schema_inputs(schema, {"count": 3, "flag": False}) == (
+        {"count": 3, "flag": False},
+        [],
+    )
+
+
 async def test_hard_nos_and_founder_rulings_are_enforced_by_code():
     result = await plan.build_plan(
         inputs(hard_nos=["no_cold_email"]), SITE, SITE_TEXT, TODAY, FakeModel()

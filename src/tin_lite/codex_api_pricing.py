@@ -90,8 +90,11 @@ def api_terms(definition, *, session_budget=False):
         "failure_policy": "verified_usage; platform_duplicates_and_overages_absorbed",
         "unknown_policy": "pending_up_to_24h_then_unresolved_cost_absorbed",
     }
+    # Isolated procedures (e.g. onboarding children) joined the procedure contract on
+    # 2026-09-25. Terms already pinned without codex_contract keep the v1 CONTRACT.
     if definition.get("procedure", {}).get("sandbox", {}).get("profile", "default") in {
         "default",
+        "isolated",
         "browser",
         "studio",
     }:
@@ -126,6 +129,28 @@ def api_terms(definition, *, session_budget=False):
         )
         terms.pop("request_maximum_nanos")
     return terms
+
+
+def isolated_v1_terms(terms):
+    """The pilot v1 shape isolated procedures were quoted with before 2026-09-25.
+
+    Only for honoring an already-issued, unexpired quote; new admissions use v3.
+    """
+    terms = {key: value for key, value in terms.items() if key != "codex_contract"}
+    terms.update(
+        request_maximum_input_bytes=REQUEST_INPUT_ENVELOPE,
+        request_maximum_nanos=REQUEST_MAXIMUM,
+    )
+    return terms
+
+
+def issued_before_isolated_v3(quoted_terms, terms, definition):
+    return (
+        quoted_terms.get("kind") == "codex_api"
+        and "codex_contract" not in quoted_terms
+        and "codex_contract" in terms
+        and definition.get("procedure", {}).get("sandbox", {}).get("profile") == "isolated"
+    )
 
 
 def price_response(card, record):
