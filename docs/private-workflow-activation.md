@@ -29,8 +29,9 @@ workflow_packages/custom.research_digest/
 1. Use `list_project_files` and `commit_project_changes` to commit the package against the current
    project revision. Ordinary file concurrency/conflict rules apply.
 2. `validate_workflow_package(project_id, path, revision)` reads only declared regular files at
-   that exact commit. It returns diagnostics, digest, source paths, output and required
-   integrations. `runtime_available` means the pilot runtime is enabled, **not** that integrations
+   that exact commit. `path` is the manifest, `workflow_packages/custom.<key>/workflow.json`;
+   the package directory is accepted too. It returns diagnostics, digest, source paths, output
+   and required integrations. `runtime_available` means the pilot runtime is enabled, **not** that integrations
    are connected or that a future model run is guaranteed to succeed.
 3. `activate_workflow_package(project_id, path, revision, request_id, expected_revision)` validates
    again and projects the recipe into the existing catalog. Explicit null creates; the current

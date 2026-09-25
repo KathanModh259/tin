@@ -31,6 +31,14 @@ class PrivateWorkflowError(WorkflowInputError):
         return {"code": self.code, "message": str(self), "path": self.path}
 
 
+def package_manifest_path(path: str) -> str:
+    """Accept the package directory an agent points at, as well as its manifest."""
+    value = str(path).strip().removeprefix("./").rstrip("/")
+    if value.startswith("workflow_packages/") and value.count("/") == 1:
+        value += "/workflow.json"
+    return value
+
+
 class PackageSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
     path: str = Field(pattern=r"^workflow_packages/custom\.[a-z][a-z0-9_]{0,47}/workflow\.json$")
@@ -223,10 +231,24 @@ def validate_private_definition(definition):
     return spec
 
 
-def private_execution_ready(settings, project_id: UUID) -> bool:
+def private_execution_blocker(settings, project_id: UUID, action: str = "execution") -> str | None:
+    """Say which private execution gate is closed, or None when both are open."""
     projects = getattr(settings, "private_workflow_projects", ())
-    admitted = getattr(settings, "private_workflows_open", False) or project_id in projects
-    return admitted and bool(getattr(settings, "e2b_isolated_template", None))
+    if not (getattr(settings, "private_workflows_open", False) or project_id in projects):
+        return (
+            f"Private {action} is not enabled for this project: it is not admitted to private "
+            "workflow execution on this deployment. Ask the Tin operator to admit it."
+        )
+    if not getattr(settings, "e2b_isolated_template", None):
+        return (
+            f"Private {action} is unavailable: this deployment has no isolated runtime "
+            "configured for private workflows."
+        )
+    return None
+
+
+def private_execution_ready(settings, project_id: UUID) -> bool:
+    return private_execution_blocker(settings, project_id) is None
 
 
 def package_policy(definition):
@@ -250,12 +272,8 @@ def require_private_execution(settings, workflow, project_id):
         return
     if workflow.project_id != project_id:
         raise LookupError("workflow not found")
-    if not private_execution_ready(settings, project_id):
-        raise PrivateWorkflowError(
-            "private_execution_unavailable",
-            "Private execution is not enabled for this project.",
-            status=409,
-        )
+    if blocker := private_execution_blocker(settings, project_id):
+        raise PrivateWorkflowError("private_execution_unavailable", blocker, status=409)
     validate_private_definition(workflow.definition)
 
 
@@ -356,12 +374,8 @@ class PrivateWorkflows:
 
     async def activate(self, *, project_id, actor, client_id, selection):
         project = await self.project(project_id, actor)
-        if not private_execution_ready(self.settings, project_id):
-            raise PrivateWorkflowError(
-                "private_execution_unavailable",
-                "Private activation is not enabled for this project.",
-                status=409,
-            )
+        if blocker := private_execution_blocker(self.settings, project_id, "activation"):
+            raise PrivateWorkflowError("private_execution_unavailable", blocker, status=409)
         request = {**selection.model_dump(mode="json"), "actor": actor, "client_id": client_id}
         key = f"private-workflow:{project_id}:{selection.request_id}"
         async with self.db.effect_lock(key, "private_workflow_activate") as (conn, existing):
@@ -587,7 +601,7 @@ def workflow_source_view(workflow, settings):
 
 
 def authoring_guide(*, settings, project_id):
-    from tin_lite.workflow_code import example_files
+    from tin_lite.workflow_code import MODEL_TARGETS, example_files
     from tin_lite.workflow_creator import creator_files
 
     key = "custom.research_digest"
@@ -820,7 +834,8 @@ def authoring_guide(*, settings, project_id):
                     "route=..., step=..., instructions=..., data=..., output_schema=None)"
                 ),
                 "routes": [
-                    {"provider": "openai", "model": model} for model in ("gpt-6-luna", "gpt-6-sol")
+                    {"provider": provider, "model": model}
+                    for provider, model in sorted(MODEL_TARGETS)
                 ],
                 "limits": (
                     "Declare max_calls (1-4 per route, 8 total), "

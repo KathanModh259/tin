@@ -82,6 +82,7 @@ from tin_lite.private_workflows import (
     PrivateWorkflowError,
     PrivateWorkflows,
     authoring_guide,
+    package_manifest_path,
     private_execution_ready,
     workflow_source_view,
 )
@@ -156,13 +157,32 @@ def _mcp_input_schema(definition: dict[str, Any]) -> dict[str, Any]:
     return client_input_schema(definition)
 
 
-def _mcp_workflow(workflows: list[Any], identifier: str) -> Any:
+def _mcp_workflow(workflows: list[Any], identifier: str, *, parameter: str = "workflow_id") -> Any:
     matches = [item for item in workflows if str(item.id) == identifier or item.key == identifier]
     if len(matches) > 1:
         raise ToolError("workflow key is ambiguous; use the UUID returned by list_workflows")
     if not matches:
-        raise ToolError("workflow_id must be a workflow UUID or key returned by list_workflows")
+        raise ToolError(
+            f"{parameter} {identifier!r} is not a workflow UUID or key returned by list_workflows"
+        )
     return matches[0]
+
+
+def _same_uuid(left: Any, right: Any) -> bool:
+    try:
+        return UUID(str(left).strip()) == UUID(str(right).strip())
+    except ValueError:
+        return str(left) == str(right)
+
+
+def _mcp_bound_inputs(inputs: dict[str, Any] | None, project_id: Any) -> dict[str, Any]:
+    """Drop a redundant inputs.project_id; Tin binds the project from the tool call."""
+
+    supplied = dict(inputs or {})
+    supplied_project_id = supplied.pop("project_id", None)
+    if supplied_project_id is not None and not _same_uuid(supplied_project_id, project_id):
+        raise ToolError("inputs.project_id conflicts with the project_id bound to this tool call")
+    return supplied
 
 
 def _validate_revision(value: str) -> None:
@@ -1285,16 +1305,46 @@ def create_mcp_app(
         parsed, _token, _service = await private_service(project_id, "get_workflow_authoring_guide")
         return authoring_guide(settings=settings, project_id=parsed)
 
+    def package_selection(model, **values):
+        """Name the malformed package field instead of returning a raw pydantic error."""
+        supplied = values["path"]
+        values["path"] = package_manifest_path(supplied)
+        try:
+            return model(**values)
+        except ValidationError as exc:
+            problems = []
+            for error in exc.errors():
+                field = ".".join(str(part) for part in error["loc"]) or "selection"
+                if field == "path":
+                    problems.append(
+                        f"path {supplied!r} must be workflow_packages/custom.<key>/workflow.json"
+                    )
+                elif field in {"revision", "expected_revision"}:
+                    problems.append(f"{field} must be a lowercase 40-character commit SHA")
+                else:
+                    problems.append(f"{field}: {error['msg']}")
+            raise ToolError("invalid: " + "; ".join(problems)) from exc
+
     @server.tool(annotations=ToolAnnotations(read_only_hint=True))
     async def validate_workflow_package(
-        project_id: str, path: str, revision: str
+        project_id: str,
+        path: Annotated[
+            str,
+            Field(
+                description="Package manifest path, workflow_packages/custom.<key>/workflow.json. "
+                "The package directory is also accepted."
+            ),
+        ],
+        revision: Annotated[
+            str, Field(description="40-character commit SHA that contains the package files.")
+        ],
     ) -> dict[str, Any]:
         """Validate exact project package files without activating or executing them.
 
         Start with get_workflow_authoring_guide.
         """
         parsed, token, service = await private_service(project_id, "validate_workflow_package")
-        selection = PackageSelection(path=path, revision=revision)
+        selection = package_selection(PackageSelection, path=path, revision=revision)
         return await private_result(
             service.validate(project_id=parsed, actor=token.subject, selection=selection)
         )
@@ -1419,7 +1469,8 @@ def create_mcp_app(
         Refresh list_workflows afterward; saved configurations do not upgrade.
         """
         parsed, token, service = await private_service(project_id, "activate_workflow_package")
-        selection = PackageActivation(
+        selection = package_selection(
+            PackageActivation,
             path=path,
             revision=revision,
             request_id=_mcp_uuid(request_id, field="request_id"),
@@ -2692,12 +2743,7 @@ def create_mcp_app(
         )
         workflows = await runtime().database.list_workflows(project_id=parsed_project_id)
         workflow = _mcp_workflow(workflows, workflow_id.strip())
-        supplied_inputs = dict(inputs or {})
-        supplied_project_id = supplied_inputs.pop("project_id", None)
-        if supplied_project_id is not None and str(supplied_project_id) != str(parsed_project_id):
-            raise ToolError(
-                "inputs.project_id conflicts with the project_id bound to this tool call"
-            )
+        supplied_inputs = _mcp_bound_inputs(inputs, parsed_project_id)
         task_fields = {"instruction": instruction, "title": title}
         if workflow.executor != PROJECT_TASK_WORKFLOW_NAME and any(
             value is not None for value in task_fields.values()
@@ -3318,8 +3364,11 @@ def create_mcp_app(
             ),
         ] = None,
         workflow_id: Annotated[
-            UUID | None,
-            Field(description="Workflow UUID returned by get_started or list_workflows."),
+            str | None,
+            Field(
+                description="Workflow UUID returned by get_started or list_workflows. "
+                "A workflow key is also accepted."
+            ),
         ] = None,
     ) -> dict[str, Any]:
         """Inspect a workflow by workflow_id or unambiguous workflow_key.
@@ -3338,12 +3387,13 @@ def create_mcp_app(
         parsed_project_id = project_id
         if parsed_project_id is not None:
             await require_project(parsed_project_id, token, tool_name="get_workflow")
-        workflow_uuid = workflow_id
-        if workflow_key is not None:
-            try:
-                workflow_uuid = UUID(workflow_key)
-            except ValueError:
-                pass
+        parameter = "workflow_key" if workflow_key is not None else "workflow_id"
+        identifier = str(workflow_key if workflow_key is not None else workflow_id).strip()
+        workflow_uuid: UUID | None = None
+        try:
+            workflow_uuid = UUID(identifier)
+        except ValueError:
+            pass
         if workflow_uuid is not None:
             workflow = await runtime().database.get_workflow(workflow_uuid)
             if workflow is None:
@@ -3357,14 +3407,15 @@ def create_mcp_app(
             elif workflow.project_id not in (None, parsed_project_id):
                 raise ToolError("workflow not found")
         elif parsed_project_id is None:
-            workflow = await runtime().database.get_registry_workflow(workflow_key)
+            workflow = await runtime().database.get_registry_workflow(identifier)
             if workflow is None:
                 raise ToolError(
-                    "workflow not found; supply project_id to inspect project-specific keys"
+                    f"workflow not found for {parameter} {identifier!r}; "
+                    "supply project_id to inspect project-specific keys"
                 )
         else:
             workflows = await runtime().database.list_workflows(project_id=parsed_project_id)
-            workflow = _mcp_workflow(workflows, workflow_key)
+            workflow = _mcp_workflow(workflows, identifier, parameter=parameter)
         readiness = (
             await project_readiness(
                 database=runtime().database,
