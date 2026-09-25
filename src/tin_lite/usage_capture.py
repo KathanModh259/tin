@@ -76,6 +76,14 @@ def billable_search_calls(output):
     return searches
 
 
+class ObservationAlreadyRecorded(RuntimeError):
+    """A metered request for this run step was already attempted.
+
+    Its outcome may be unknown, so it is never silently repeated; callers convert
+    this into a terminal run error.
+    """
+
+
 def observation_key(run_id, step, endpoint):
     return f"usage:{run_id}:external:{hashlib.sha256(f'{step}:{endpoint}'.encode()).hexdigest()}"
 
@@ -90,7 +98,9 @@ async def begin_observation(provider, category, endpoint, *, request=None):
     if existing is not None:
         # The owning workflow reconciles its output. An observation is not permission
         # to repeat a request whose outcome is unknown.
-        raise RuntimeError("External request already observed; recover its owning effect")
+        raise ObservationAlreadyRecorded(
+            "External request already observed; recover its owning effect"
+        )
     record = {
         "version": 1,
         "run_id": str(run_id),

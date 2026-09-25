@@ -17,6 +17,8 @@ MAX_VISIBILITY_EVIDENCE_BYTES = 2_000_000
 MAX_SOURCES_PER_ANSWER = 20
 MAX_VISIBILITY_RESPONSE_BYTES = 250_000
 DOMAIN_PATTERN = r"(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}"
+QUESTION_ID_MAX = 32
+QUESTION_ID_PATTERN = r"^[a-z0-9_-]{1,32}$"
 ResponseRequest = Callable[[], Awaitable[dict[str, Any]]]
 ResponseCheckpoint = Callable[[ResponseRequest], Awaitable[dict[str, Any]]]
 QUESTION_FAMILIES = (
@@ -108,6 +110,8 @@ class VisibilityAuditor:
         panel["model"] = self.model
         if isinstance(panel.get("target"), dict):
             panel["target"]["domain"] = _canonical_domain(panel["target"].get("domain"))
+        # Before validation and before the activity derives answer receipts from them.
+        _normalize_question_ids(panel)
         _validate_panel(panel, target_request=target_request)
         if "CANDIDATE_BANK_V1" in self._skill_suite:
             _validate_candidate_bank(panel)
@@ -352,7 +356,7 @@ def _panel_schema(*, candidate_bank: bool = False) -> dict[str, Any]:
                     "type": "object",
                     "additionalProperties": False,
                     "properties": {
-                        "id": {"type": "string"},
+                        "id": {"type": "string", "pattern": QUESTION_ID_PATTERN},
                         "family": {"type": "string", "enum": list(QUESTION_FAMILIES)},
                         "fit": {
                             "type": "string",
@@ -486,6 +490,47 @@ def _adjudication_schema() -> dict[str, Any]:
     }
 
 
+def _question_id_base(value: str) -> str:
+    return re.sub(r"[^a-z0-9_-]", "_", value.strip().lower())[:QUESTION_ID_MAX]
+
+
+def _normalize_question_ids(panel: dict[str, Any]) -> dict[str, str]:
+    """Make model-chosen question IDs safe and unique, deterministically.
+
+    IDs name answer receipts, so the same panel response always yields the same IDs:
+    lowercase, other characters replaced with "_", at most 32 characters, and a
+    "-2", "-3"... suffix for a repeat. Returns the original-to-normalized map.
+    """
+    questions = panel.get("questions")
+    mapping: dict[str, str] = {}
+    if not isinstance(questions, list):
+        return mapping
+    used: set[str] = set()
+    for index, item in enumerate(questions, start=1):
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            continue
+        original = item["id"]
+        base = _question_id_base(original) or f"q{index}"
+        candidate, attempt = base, 2
+        while candidate in used:
+            suffix = f"-{attempt}"
+            candidate = base[: QUESTION_ID_MAX - len(suffix)] + suffix
+            attempt += 1
+        used.add(candidate)
+        item["id"] = candidate
+        mapping.setdefault(original, candidate)
+    return mapping
+
+
+def _question_ref(value: Any, question_ids: list[str]) -> Any:
+    """Map a reference written in the pre-normalization spelling onto a panel ID."""
+    if isinstance(value, str) and value not in question_ids:
+        normalized = _question_id_base(value)
+        if normalized in question_ids:
+            return normalized
+    return value
+
+
 def _validate_panel(panel: dict[str, Any], *, target_request: str) -> None:
     target = panel.get("target")
     questions = panel.get("questions")
@@ -535,7 +580,7 @@ def _validate_panel(panel: dict[str, Any], *, target_request: str) -> None:
         text = item.get("text")
         if (
             not isinstance(question_id, str)
-            or not re.fullmatch(r"[a-z0-9_-]{1,32}", question_id)
+            or not re.fullmatch(QUESTION_ID_PATTERN, question_id)
             or question_id in ids
         ):
             raise VisibilityProtocolError("visibility question ID is invalid")
@@ -576,6 +621,7 @@ def _normalize_adjudication(
     for outcome in outcomes:
         if not isinstance(outcome, dict):
             raise VisibilityProtocolError("visibility outcome is invalid")
+        outcome["question_id"] = _question_ref(outcome.get("question_id"), question_ids)
         question_id = outcome.get("question_id")
         if question_id not in question_ids or question_id in by_id:
             raise VisibilityProtocolError("visibility outcome question is invalid")
@@ -632,6 +678,9 @@ def _normalize_adjudication(
         if not isinstance(recommendation.get("action"), str) or not recommendation["action"]:
             raise VisibilityProtocolError("visibility recommendation action is invalid")
         evidence_ids = recommendation.get("evidence_question_ids")
+        if isinstance(evidence_ids, list):
+            evidence_ids = [_question_ref(item, question_ids) for item in evidence_ids]
+            recommendation["evidence_question_ids"] = evidence_ids
         if not isinstance(evidence_ids, list) or any(
             item not in question_ids for item in evidence_ids
         ):

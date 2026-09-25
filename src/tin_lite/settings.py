@@ -191,6 +191,12 @@ class Settings(BaseSettings):
         default="tin-lite-codex-studio", alias="TIN_LITE_E2B_STUDIO_TEMPLATE"
     )
     task_queue: str = Field(default="tin-lite-checkpoint-a", alias="TIN_LITE_TASK_QUEUE")
+    # On SIGTERM the worker stops polling and in-flight activities get this long to
+    # finish before Temporal cancels them. HTTP (including the Codex relay those
+    # activities call) keeps serving meanwhile; systemd TimeoutStopSec must exceed it.
+    worker_graceful_shutdown_seconds: int = Field(
+        default=300, ge=0, alias="TIN_LITE_WORKER_GRACEFUL_SHUTDOWN_SECONDS"
+    )
     switchboard_public_url: str = Field(
         default="http://127.0.0.1:8000", alias="TIN_LITE_PUBLIC_URL"
     )

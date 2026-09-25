@@ -220,7 +220,7 @@ class FakeDatabase:
         assert values["exclude_run_id"] == self.run.id
         return [self.visibility_run]
 
-    async def get_effect(self, execution_key):
+    async def get_effect(self, execution_key, conn=None):
         return self.receipts.get(execution_key)
 
     async def project_success(self, **values):

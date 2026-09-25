@@ -196,6 +196,38 @@ async def _validate_community(
         raise SystemExit(1)
 
 
+def _serve() -> None:
+    from tin_lite.main import app  # imported here: building the app reads settings
+    from tin_lite.serving import DrainingServer
+
+    settings = get_settings()
+
+    async def drain_worker() -> None:
+        runtime = getattr(app.state, "runtime", None)
+        if runtime is not None:
+            await runtime.worker.shutdown()
+
+    # OAuth providers return short-lived authorization codes in callback query
+    # strings. Uvicorn's generic access logger includes the full query string;
+    # disable it and retain only deliberate application-level event logging.
+    config = uvicorn.Config(
+        app,
+        host="0.0.0.0",  # noqa: S104
+        port=8000,
+        access_log=False,
+        # Persistent MCP/SSE connections must not hold shutdown until systemd
+        # kills the process. This applies after the worker drain below.
+        timeout_graceful_shutdown=20,
+    )
+    DrainingServer(
+        config,
+        drain=drain_worker,
+        # The worker cancels activities at its graceful timeout; the margin covers
+        # reporting their results and stopping the pollers.
+        drain_timeout=settings.worker_graceful_shutdown_seconds + 60,
+    ).run()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="tin-lite")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -246,18 +278,7 @@ def main() -> None:
     elif args.command == "validate-community":
         asyncio.run(_validate_community(args.root, args.private, args.package))
     elif args.command == "serve":
-        # OAuth providers return short-lived authorization codes in callback query
-        # strings. Uvicorn's generic access logger includes the full query string;
-        # disable it and retain only deliberate application-level event logging.
-        uvicorn.run(
-            "tin_lite.main:app",
-            host="0.0.0.0",  # noqa: S104
-            port=8000,
-            access_log=False,
-            # Persistent MCP/SSE connections must not hold shutdown until systemd
-            # kills the process. Leave time for the lifespan/worker cleanup too.
-            timeout_graceful_shutdown=20,
-        )
+        _serve()
     elif args.command == "create-project":
         asyncio.run(_create_project(args.name, args.repo_id))
     elif args.command == "grant-project-access":

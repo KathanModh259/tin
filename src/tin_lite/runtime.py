@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 
 from temporalio import activity
@@ -427,6 +428,7 @@ async def build_runtime(settings: Settings) -> RuntimeServices:
     by_name = {activity._Definition.must_from_callable(fn).name: fn for fn in activities}
     if set(by_name) != CODEX_ACTIVITIES | TRUSTED_ACTIVITIES:
         raise RuntimeError("Every registered activity needs an explicit worker lane")
+    graceful_shutdown = timedelta(seconds=settings.worker_graceful_shutdown_seconds)
     worker = WorkerGroup(
         Worker(
             temporal,
@@ -435,6 +437,7 @@ async def build_runtime(settings: Settings) -> RuntimeServices:
             # Project child-workflow IDs serialize execution; this is only the
             # machine's parallel capacity across projects, not an account lock.
             max_concurrent_activities=4,
+            graceful_shutdown_timeout=graceful_shutdown,
             workflows=registered_workflows(),
             workflow_runner=workflow_runner(),
             activities=activities,
@@ -444,6 +447,7 @@ async def build_runtime(settings: Settings) -> RuntimeServices:
             temporal,
             task_queue=trusted_task_queue(settings.task_queue),
             max_concurrent_activities=4,
+            graceful_shutdown_timeout=graceful_shutdown,
             activities=[by_name[name] for name in sorted(TRUSTED_ACTIVITIES)],
         ),
     )

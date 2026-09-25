@@ -117,7 +117,11 @@ from tin_lite.site_health import (
     validate_site_health_model_route,
 )
 from tin_lite.system_wiki import read_system_wiki_document
-from tin_lite.usage_capture import external_usage_scope, observation_key
+from tin_lite.usage_capture import (
+    ObservationAlreadyRecorded,
+    external_usage_scope,
+    observation_key,
+)
 from tin_lite.visibility import (
     ResponseCheckpoint,
     ResponseRequest,
@@ -1129,6 +1133,9 @@ class TinActivities:
                         )
                         if current_index is not None:
                             owned_section = extract_owned_section(current_index.decode("utf-8"))
+                    await _refuse_repeated_model_request(
+                        self._db, conn, run_id=run_id, step="memory", label="project memory"
+                    )
                     with external_usage_scope(self._db, conn, run_id, "memory"):
                         memory_index = await self._await_with_heartbeats(
                             reporter.garden(
@@ -1163,12 +1170,10 @@ class TinActivities:
                         "source_run_ids": [str(source.run_id) for source in sources],
                     },
                 )
-            except Exception as exc:
-                await self._db.fail_effect(
-                    conn,
-                    execution_key=execution_key,
-                    error_message=_safe_failure(exc),
-                )
+            except BaseException as exc:
+                await _record_effect_failure(self._db, conn, execution_key=execution_key, exc=exc)
+                if isinstance(exc, ObservationAlreadyRecorded):
+                    raise _interrupted_model_request("project memory") from exc
                 raise
 
     @activity.defn(name="project_memory_result")
@@ -1311,6 +1316,9 @@ class TinActivities:
                             content=await self._integration_evidence(project),
                         )
                     )
+                    await _refuse_repeated_model_request(
+                        self._db, conn, run_id=run_id, step="scan", label="project scan"
+                    )
                     with external_usage_scope(self._db, conn, run_id, "scan"):
                         report = await self._await_with_heartbeats(
                             reporter.report(
@@ -1344,12 +1352,10 @@ class TinActivities:
                         "source_refs": [source.artifact_ref for source in sources],
                     },
                 )
-            except Exception as exc:
-                await self._db.fail_effect(
-                    conn,
-                    execution_key=execution_key,
-                    error_message=_safe_failure(exc),
-                )
+            except BaseException as exc:
+                await _record_effect_failure(self._db, conn, execution_key=execution_key, exc=exc)
+                if isinstance(exc, ObservationAlreadyRecorded):
+                    raise _interrupted_model_request("project scan") from exc
                 raise
 
     @activity.defn(name="project_scan_result")
@@ -3714,7 +3720,15 @@ class TinActivities:
                 primary = await self._storage.read_procedure_checkpoint(
                     repo_id=project.state_repo_id, revision=revision, path=procedure.output_path
                 )
-                await validate_pair(self._storage, project, run, primary, raw)
+                try:
+                    await validate_pair(self._storage, project, run, primary, raw)
+                except ValueError as exc:
+                    # The saved pair cannot change on retry; say so once instead of thrice.
+                    raise ApplicationError(
+                        f"Brand capture output is invalid: {exc}",
+                        type="BrandCaptureInvalid",
+                        non_retryable=True,
+                    ) from exc
         elif procedure.output_validator == article_review.VALIDATOR:
             article_review.validate_notes(
                 raw, revision=procedure.review_revision_context is not None
@@ -4467,14 +4481,17 @@ class TinActivities:
                 return existing.result
             await self._db.start_effect(conn, execution_key=execution_key, operation=operation)
             try:
+                await _refuse_repeated_model_request(
+                    self._db, conn, run_id=run_id, step="weekly_brief", label="weekly brief"
+                )
                 with external_usage_scope(self._db, conn, run_id, "weekly_brief"):
                     result = await execute()
                 await self._db.complete_effect(conn, execution_key=execution_key, result=result)
                 return result
-            except Exception as exc:
-                await self._db.fail_effect(
-                    conn, execution_key=execution_key, error_message=_safe_failure(exc)
-                )
+            except BaseException as exc:
+                await _record_effect_failure(self._db, conn, execution_key=execution_key, exc=exc)
+                if isinstance(exc, ObservationAlreadyRecorded):
+                    raise _interrupted_model_request("weekly brief") from exc
                 raise
 
     async def _pinned_native_reporter(self, run, reporter, key):
@@ -4642,6 +4659,9 @@ class TinActivities:
                 return existing.result
             await self._db.start_effect(conn, execution_key=execution_key, operation=operation)
             try:
+                await _refuse_repeated_model_request(
+                    self._db, conn, run_id=run_id, step="answer_page", label="answer page"
+                )
                 with external_usage_scope(self._db, conn, run_id, "answer_page"):
                     result = await execute()
                 await self._db.complete_effect(
@@ -4650,12 +4670,10 @@ class TinActivities:
                     result=result,
                 )
                 return result
-            except Exception as exc:
-                await self._db.fail_effect(
-                    conn,
-                    execution_key=execution_key,
-                    error_message=_safe_failure(exc),
-                )
+            except BaseException as exc:
+                await _record_effect_failure(self._db, conn, execution_key=execution_key, exc=exc)
+                if isinstance(exc, ObservationAlreadyRecorded):
+                    raise _interrupted_model_request("answer page") from exc
                 raise
 
     async def _answer_page_sources(self, *, run_id: UUID, project) -> list[AnswerPageSource]:
@@ -5141,3 +5159,45 @@ def _safe_failure(exc: BaseException) -> str:
     """Name the exception with its text, so a failed receipt says what actually went wrong."""
     text = scrub_secrets(" ".join(str(exc).split()))
     return f"{type(exc).__name__}: {text or 'operation failed'}"[:FAILURE_MESSAGE_LIMIT]
+
+
+INTERRUPTED_MODEL_REQUEST = (
+    "the model request was interrupted and was not repeated; start the run again"
+)
+
+
+def _interrupted_model_request(label: str) -> ApplicationError:
+    """A metered request whose outcome is unknown is never bought again on retry."""
+    return ApplicationError(
+        f"{label}: {INTERRUPTED_MODEL_REQUEST}",
+        type="ModelRequestInterrupted",
+        non_retryable=True,
+    )
+
+
+async def _refuse_repeated_model_request(db, conn, *, run_id: UUID, step: str, label: str) -> None:
+    if await db.get_effect(observation_key(run_id, step, "responses"), conn=conn) is not None:
+        raise _interrupted_model_request(label)
+
+
+async def _record_effect_failure(db, conn, *, execution_key: str, exc: BaseException) -> None:
+    """Mark the owning receipt failed even while the activity is being cancelled.
+
+    A deploy cancels in-flight activities; a receipt left 'started' would hide the
+    interruption from the next attempt. The write finishes before the effect lock
+    (and its connection) is released, then the cancellation continues.
+    """
+    write = asyncio.ensure_future(
+        db.fail_effect(conn, execution_key=execution_key, error_message=_safe_failure(exc))
+    )
+    interrupted = False
+    while True:
+        try:
+            await asyncio.shield(write)
+            break
+        except asyncio.CancelledError:
+            if write.done():
+                raise
+            interrupted = True
+    if interrupted and not isinstance(exc, asyncio.CancelledError):
+        raise asyncio.CancelledError

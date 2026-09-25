@@ -36,8 +36,12 @@ example, not a diagnosis or a default identity:
 Allowed identity classes: distinctive_strong, distinctive_inconsistent, competent_generic,
 weak, unknown. Evidence status: adequate, partial, insufficient, conflicting. One to five
 findings, each with observation, source_ids and generation_implication. The block is at most
-8,000 bytes. Do not add probabilities or other fields. A packet-only capture must say it used
-supplied observations; method describes the rubric, not proof of independent browser coverage.
+8,000 bytes. Do not add probabilities or other fields. `method` is a fixed literal: always
+exactly `{"kind": "visual_capture", "rubric_version": "marketing-brand.v1"}`, whatever you
+observed. It names the rubric, not your coverage. Express a packet-only or otherwise limited
+capture through `evidence_status` (usually `partial` or `insufficient`) and in the findings
+and the Assessment and sources prose, for example "supplied observations only; no browser
+capture".
 
 Declare every source ID with a Markdown reference definition, for example:
 `[site-home]: https://example.com/ "Homepage, observed at actual capture time"`.

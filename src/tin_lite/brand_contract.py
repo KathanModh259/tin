@@ -19,6 +19,7 @@ DESIGN_SECTIONS = (
 )
 CLASSES = {"distinctive_strong", "distinctive_inconsistent", "competent_generic", "weak", "unknown"}
 EVIDENCE = {"adequate", "partial", "insufficient", "conflicting"}
+METHOD = {"kind": "visual_capture", "rubric_version": "marketing-brand.v1"}
 _HEX = re.compile(r"#[0-9a-fA-F]{6}\Z")
 _FENCES = re.compile(r"^```json\s*\n(.*?)\n```[ \t]*$", re.M | re.S)
 _REFERENCE = re.compile(r'^\[([a-z][a-z0-9_-]{0,63})\]:\s+(\S+)(?:\s+"[^"\n]*")?\s*$', re.M)
@@ -132,11 +133,27 @@ def sources(text):
     return found
 
 
-def assessment(text, *, required=False):
+def assessment(text, *, required=False, notes=None):
+    """The validated assessment; its method is always the canonical constant.
+
+    Code owns the method. A capture that omits it or describes it differently (for
+    example "packet_only") is normalized, with a note appended to ``notes``; coverage
+    limits belong in ``evidence_status`` and the findings, not in the method.
+    """
     item = block(text, ASSESSMENT_SCHEMA, 8_000, required=required)
     if item is None:
         return None
-    value = item[0]
+    value = dict(item[0])
+    if "method" in value and not isinstance(value["method"], dict):
+        raise ValueError("Brand assessment method must be an object")
+    if value.get("method") != METHOD:
+        if notes is not None:
+            notes.append(
+                "Brand assessment method was "
+                + ("missing" if "method" not in value else "non-standard")
+                + f"; recorded as {METHOD['kind']} ({METHOD['rubric_version']})."
+            )
+        value["method"] = dict(METHOD)
     if (
         set(value)
         != {
@@ -169,8 +186,6 @@ def assessment(text, *, required=False):
         raise ValueError("Invalid capture timestamp") from exc
     if stamp.tzinfo is None:
         raise ValueError("Capture timestamp must include its timezone")
-    if value["method"] != {"kind": "visual_capture", "rubric_version": "marketing-brand.v1"}:
-        raise ValueError("Unsupported brand assessment method")
     findings = value["findings"]
     if not isinstance(findings, list) or not 1 <= len(findings) <= 5:
         raise ValueError("Brand assessment requires one to five grounded findings")
@@ -203,10 +218,10 @@ def sections(text, headings):
     return result
 
 
-def validate_new_brand(text):
+def validate_new_brand(text, *, notes=None):
     parts = sections(text, BRAND_SECTIONS)
     palette = tokens(text)
-    assessment(parts["Assessment and sources"], required=True)
+    assessment(parts["Assessment and sources"], required=True, notes=notes)
     if block(text, TOKEN_SCHEMA, 2_000)[2] != len(text.rstrip()):
         raise ValueError("Brand tokens must be the final block")
     visual = parts["Visual style"].lower()
