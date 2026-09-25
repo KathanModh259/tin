@@ -18,6 +18,7 @@ from tin_lite.integrations import (
     IntegrationRequirement,
     ServiceCallRefused,
     ServiceResponseTooLarge,
+    check_google_arguments,
 )
 from tin_lite.project_connections import CUSTOM_KEY, READ_METHODS, request_api, request_contract
 
@@ -52,11 +53,22 @@ OPERATIONS = {
         for name, op in posthog_connection.OPERATIONS.items()
     },
 }
+
+
+def _check_google_arguments(operation, args):
+    try:
+        check_google_arguments(operation, args)
+    except IntegrationError as exc:
+        raise ServiceArgumentError(str(exc)) from None
+
+
 # Providers whose argument values are checked before a receipt exists, so a malformed call is
 # a contract error the author can fix rather than an uncertain provider attempt.
 ARGUMENT_CHECKS = {
     STRIPE_PROVIDER: stripe_connection.check_arguments,
     POSTHOG_PROVIDER: posthog_connection.check_arguments,
+    "analytics.gsc": _check_google_arguments,
+    "workspace.google": _check_google_arguments,
 }
 
 

@@ -18,7 +18,7 @@ from test_private_workflows import ACTOR, structured
 from test_procedure_publication import publication_db as publication_db
 from test_workflow_code import setup, start
 
-from tin_lite.code_services import CodeServiceError
+from tin_lite.code_services import CodeServiceError, CodeServices
 from tin_lite.integrations import (
     CredentialCipher,
     IntegrationAuthorizationError,
@@ -257,6 +257,118 @@ async def test_http_preserves_resolver_preference_and_checks_every_address(addre
         with pytest.raises(IntegrationAuthorizationError, match="not a public address"):
             await request_api(connection, SECRET, payload()["arguments"], **args)
         assert len(seen) == 1
+
+
+def google_spec(provider, capability):
+    body = definition()
+    body["integration_requirements"] = [
+        {"provider_key": provider, "capabilities": [capability], "required": True}
+    ]
+    body["code"]["services"] = {
+        "google": {"provider_key": provider, "max_calls": 2, "max_response_bytes": 16000}
+    }
+    return validate_code_definition(body)
+
+
+@pytest.mark.parametrize(
+    ("provider", "capability", "operation", "arguments", "reason"),
+    [
+        (
+            "analytics.gsc",
+            "search_analytics.read",
+            "search_analytics.read",
+            {"start_date": "2026-09-10", "end_date": "2026-09-01"},
+            "date range",
+        ),
+        (
+            "analytics.gsc",
+            "search_analytics.read",
+            "search_analytics.read",
+            {"start_date": 20260801, "end_date": "2026-08-31"},
+            "YYYY-MM-DD",
+        ),
+        (
+            "analytics.gsc",
+            "search_analytics.read",
+            "search_analytics.read",
+            {"start_date": "2026-08-01", "end_date": "2026-08-31", "row_limit": 50000},
+            "row limit",
+        ),
+        (
+            "analytics.gsc",
+            "search_analytics.read",
+            "search_analytics.read",
+            {"start_date": "2026-08-01", "end_date": "2026-08-31", "dimensions": [["query"]]},
+            "dimensions",
+        ),
+        (
+            "analytics.gsc",
+            "search_analytics.read",
+            "search_analytics.read",
+            {"start_date": "2026-08-01"},
+            "",
+        ),
+        (
+            "workspace.google",
+            "gmail.messages.read",
+            "gmail.messages.search",
+            {"query": 7, "max_results": 10},
+            "search query",
+        ),
+        (
+            "workspace.google",
+            "gmail.messages.read",
+            "gmail.messages.search",
+            {"query": "from:founder", "max_results": "10"},
+            "result limit",
+        ),
+        (
+            "workspace.google",
+            "gmail.messages.read",
+            "gmail.thread.read",
+            {"thread_id": 42},
+            "thread ID",
+        ),
+        (
+            "workspace.google",
+            "calendar.events.read",
+            "calendar.events.list",
+            {
+                "time_min": "2026-09-02T00:00:00Z",
+                "time_max": "2026-09-01T00:00:00Z",
+                "query": "",
+                "max_results": 10,
+            },
+            "Calendar range",
+        ),
+        (
+            "workspace.google",
+            "calendar.events.read",
+            "calendar.events.list",
+            {"time_min": 1, "time_max": "2026-09-01T00:00:00Z", "query": "", "max_results": 10},
+            "ISO 8601",
+        ),
+    ],
+)
+async def test_google_service_values_are_contract_errors_before_any_receipt(
+    provider, capability, operation, arguments, reason
+):
+    # No database, run or connection: a malformed value must be refused before any of them.
+    services = CodeServices(database=None, integrations=None, authorize=None)
+    with pytest.raises(CodeServiceError, match="declared contract") as refused:
+        await services.call(
+            conn=None,
+            run=None,
+            workflow=None,
+            spec=google_spec(provider, capability),
+            payload={
+                "service": "google",
+                "step": "read",
+                "operation": operation,
+                "arguments": arguments,
+            },
+        )
+    assert reason in str(refused.value)
 
 
 class ServiceCompute:
@@ -553,6 +665,24 @@ async def test_search_console_service_forwards_paging_filters_and_bound(billed, 
                     "arguments": {**arguments, "aggregation_type": "byPage"},
                 },
             )
+        # A bad value is the author's contract error, never an unresolved step blocking the run.
+        with pytest.raises(CodeServiceError, match="declared contract: Search Console date"):
+            await code.services.call(
+                conn=conn,
+                run=run,
+                workflow=changed,
+                spec=spec,
+                payload={
+                    **selected,
+                    "step": "reversed",
+                    "arguments": {**arguments, "end_date": "2026-07-01"},
+                },
+            )
+        assert len(seen) == 1
+        result = await code.services.call(
+            conn=conn, run=run, workflow=changed, spec=spec, payload={**selected, "step": "next"}
+        )
+        assert result["next_start_row"] == 200 and len(seen) == 2
     await service.close()
 
 
