@@ -1346,11 +1346,20 @@ class Database:
                 raise LookupError("invitation not found")
             if row["email"] != expected_email:
                 raise RuntimeError("invitation identity changed")
-            if row["expires_at"] <= datetime.now(UTC):
-                raise RuntimeError("invitation has expired")
             accepted_by = row["accepted_by_clerk_user_id"]
             if accepted_by is not None and accepted_by != clerk_user_id:
                 raise RuntimeError("invitation has already been accepted")
+            # Its member may replay an accepted invitation after expiry; it grants nothing new.
+            if row["expires_at"] <= datetime.now(UTC) and (
+                accepted_by is None
+                or not await conn.fetchval(
+                    "SELECT EXISTS (SELECT 1 FROM project_memberships "
+                    "WHERE project_id = $1 AND clerk_user_id = $2)",
+                    row["project_id"],
+                    clerk_user_id,
+                )
+            ):
+                raise RuntimeError("invitation has expired")
             await conn.execute(
                 """
                 INSERT INTO project_memberships (project_id, clerk_user_id)
