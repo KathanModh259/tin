@@ -12,12 +12,15 @@ async def history(executor, *, project_id, program_id):
     # A failed rewrite must not hide a usable result. Assessments may supersede a draft's
     # relevance but never delete its artifact or resolve its pending approval. Legacy drafts have
     # the same item in their preparation receipt/input; no backfill or plan rewrite needed.
+    # Delivery follows the approval-time choice when one exists, as ContentDelivery.intent does.
     rows = await executor.fetch(
         """
         SELECT DISTINCT ON (item_id) * FROM (
             SELECT run.id, run.status, run.created_at, run.canonical_commit_sha,
                    run.artifact_path, run.retained_output, run.output_resolution,
-                   selected.result->'delivery' AS delivery_intent,
+                   CASE WHEN choice.result IS NULL THEN selected.result->'delivery'
+                        WHEN choice.result->'settings'->>'mode' IN ('github_pr','github_commit')
+                        THEN choice.result END AS delivery_intent,
                    selected.result->'system_delivery' AS system_delivery,
                    parent.status AS system_status,
                    delivery.status AS delivery_status, delivery.result AS delivery_result,
@@ -31,6 +34,9 @@ async def history(executor, *, project_id, program_id):
             LEFT JOIN effect_receipts selected
               ON selected.execution_key='content-draft:' || run.id::text || ':selection'
              AND selected.operation='content_draft_selection_v1' AND selected.status='completed'
+            LEFT JOIN effect_receipts choice
+              ON choice.execution_key='content-draft:' || run.id::text || ':delivery:choice'
+             AND choice.operation='content_draft_delivery_choice_v1' AND choice.status='completed'
             LEFT JOIN effect_receipts prepared
               ON prepared.execution_key='content-draft:' || run.id::text || ':prepare'
              AND prepared.operation='content.generate' AND prepared.status='completed'
