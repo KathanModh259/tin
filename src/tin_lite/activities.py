@@ -4175,6 +4175,15 @@ class TinActivities:
             await self._db.start_effect(conn, execution_key=execution_key, operation=operation)
             sandbox_id: str | None = None
             try:
+                # Unmarked turn receipts predate the API pilot and keep OAuth.
+                legacy_turn = (
+                    existing is not None and (existing.result or {}).get("runner") != "task-api-v1"
+                )
+                if existing is None:
+                    # A failed first turn is not a pre-migration OAuth turn on retry.
+                    await self._db.save_effect_progress(
+                        conn, execution_key=execution_key, result={"runner": "task-api-v1"}
+                    )
                 run = await self._require_run(run_id)
                 if run.executor != PROJECT_TASK_WORKFLOW_NAME:
                     raise RuntimeError("run is not a project task")
@@ -4202,7 +4211,7 @@ class TinActivities:
                     return outcome
 
                 auth = await task_api.auth_contract(
-                    self._db, conn, run, self._settings, legacy_turn=existing is not None
+                    self._db, conn, run, self._settings, legacy_turn=legacy_turn
                 )
                 codex_api.execution_profile(
                     SandboxProfile(timeout_seconds=self._settings.sandbox_timeout_seconds), auth
