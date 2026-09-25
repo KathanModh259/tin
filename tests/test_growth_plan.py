@@ -691,6 +691,20 @@ def test_scorer_ranks_all_systems_and_penalises_fair_failures():
     assert "priceBand" not in profile
 
 
+def test_every_form_budget_reaches_the_scorer():
+    # Each budget the onboarding form offers maps to a rubric value; "unknown" stays unset.
+    expected = {
+        "none": "none",
+        "under_500": "small",
+        "500_to_2000": "real",
+        "more": "real",
+        "unknown": None,
+    }
+    for budget, value in expected.items():
+        assert plan.founder_profile({"budget": budget}).get("budget") == value, budget
+    assert plan.founder_profile({"priority": "main"})["budget"] == "real"
+
+
 def resolver_for(table):
     async def resolve(host, port, **_kwargs):
         return [(None, None, None, None, (table[host], port))]

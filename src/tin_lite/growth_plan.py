@@ -315,7 +315,7 @@ def founder_profile(inputs):
     from_priority = {
         "fun": ("min", "none", "patient"),
         "side": ("some", "under_500", "two_months"),
-        "main": ("lots", "500_2000", "weeks"),
+        "main": ("lots", "500_to_2000", "weeks"),
     }
     hours, budget, urgency = from_priority.get(inputs.get("priority") or "", (None, None, None))
     hours = inputs.get("founder_hours") or hours
@@ -325,9 +325,12 @@ def founder_profile(inputs):
     if hours in ("min", "some", "lots"):
         out["hours"] = hours
     if budget:
-        out["budget"] = {"none": "none", "under_500": "small", "500_2000": "real"}.get(
-            budget, "real" if "2000" in budget else None
-        )
+        out["budget"] = {
+            "none": "none",
+            "under_500": "small",
+            "500_to_2000": "real",
+            "more": "real",
+        }.get(budget)
     if urgency:
         out["urgency"] = {"weeks": "12", "two_months": "6", "patient": "0"}.get(urgency)
     return {k: v for k, v in out.items() if v}
