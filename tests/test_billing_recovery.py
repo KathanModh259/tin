@@ -116,6 +116,47 @@ async def test_stripe_dashboard_refund_is_not_ignored(billed):
     assert await f.db.pool.fetchval("SELECT count(*) FROM billing_refunds") == 1
 
 
+async def test_dashboard_refund_failing_after_success_restores_credits(billed):
+    f = billed
+    f.settings.codex_api_projects = {f.project.id}
+    payment, _ = await fund(f, 2500)
+    obj = {
+        "id": "re_async_failure",
+        "currency": "usd",
+        "amount": 500,
+        "payment_intent": f"pi_{payment['id']}",
+        "status": "succeeded",
+        "metadata": {},
+    }
+    event = {
+        "id": "evt_refund_succeeded",
+        "type": "refund.updated",
+        "livemode": False,
+        "data": {"object": obj},
+    }
+    await f.payments.handle_event(event)
+    assert (await f.billing.overview(f.project.id, ACTOR))["available_usd"] == "20.00"
+    failed = {
+        **event,
+        "id": "evt_refund_failed",
+        "type": "refund.failed",
+        "data": {"object": {**obj, "status": "failed"}},
+    }
+    await f.payments.handle_event(failed)
+    await f.payments.handle_event({**failed, "id": "evt_refund_failed_again"})
+    view = await f.billing.overview(f.project.id, ACTOR)
+    assert view["available_usd"] == "25.00" and view["reserved_usd"] == "0.00"
+    assert view["status"] == "suspended"
+    assert await f.db.pool.fetchval("SELECT status FROM billing_refunds") == "failed"
+    assert (
+        await f.db.pool.fetchval(
+            "SELECT refunded_cents FROM billing_payments WHERE id=$1", UUID(payment["id"])
+        )
+        == 0
+    )
+    assert await f.db.pool.fetchval("SELECT count(*) FROM billing_ledger") == 3
+
+
 async def test_dispute_closed_before_created_is_idempotent(billed):
     f = billed
     f.settings.codex_api_projects = {f.project.id}

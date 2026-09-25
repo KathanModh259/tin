@@ -527,6 +527,23 @@ class StripePayments:
             or refund["stripe_refund_id"] not in {None, obj["id"]}
         ):
             raise BillingError("refund_mismatch", "Refund did not match the recorded request.")
+        if refund["status"] == "succeeded" and obj.get("status") == "failed":
+            # A card refund can fail after succeeding; Stripe returns the funds to us.
+            await self.billing.post_ledger(
+                conn,
+                account=account,
+                event_key=f"refund:{refund_id}:reversal",
+                kind="adjustment",
+                amount=refund["amount_cents"] * NANOS_PER_CENT,
+                reference=str(refund_id),
+            )
+            await conn.execute(
+                "UPDATE billing_payments SET refunded_cents=refunded_cents-$2 WHERE id=$1",
+                payment["id"],
+                refund["amount_cents"],
+            )
+            await conn.execute("UPDATE billing_refunds SET status='failed' WHERE id=$1", refund_id)
+            return
         if refund["status"] != "pending":
             return
         await conn.execute(
