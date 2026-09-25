@@ -20,7 +20,13 @@ from tin_lite.integrations import (
     ServiceResponseTooLarge,
     check_google_arguments,
 )
-from tin_lite.project_connections import CUSTOM_KEY, READ_METHODS, request_api, request_contract
+from tin_lite.project_connections import (
+    CUSTOM_KEY,
+    READ_METHODS,
+    InvalidAPIResponse,
+    request_api,
+    request_contract,
+)
 
 OPERATION = "code_service_call_v1"
 # Adding an adapter operation is an explicit reviewed mapping, never getattr on author input.
@@ -303,6 +309,9 @@ class CodeServices:
                         execution_key=usage_key,
                         result={**usage, "outcome": "response_received", "usage": {"requests": 1}},
                     )
+                    # A rejected credential needs attention whatever body the API sent with it.
+                    if isinstance(exc, InvalidAPIResponse) and exc.status in {401, 403}:
+                        await self._authentication_failed(conn, run, connection, secret_revision)
                 raise CodeServiceError(refused["message"]) from None
             except (
                 IntegrationError,
@@ -330,20 +339,7 @@ class CodeServices:
                 )
                 await project_completed_steps(conn, run.id)
                 if custom and response["status"] in {401, 403}:
-                    await conn.execute(
-                        """UPDATE integration_connections
-                           SET status='needs_attention', last_error_code='authentication_failed',
-                               configuration=jsonb_set(configuration,'{access_verified}','false'),
-                               last_checked_at=now()
-                           WHERE id=$1 AND configuration->>'revision'=$2
-                           AND EXISTS(SELECT 1 FROM project_secrets WHERE project_id=$3
-                             AND name=$4 AND revision=$5)""",
-                        connection.id,
-                        connection.configuration["revision"],
-                        run.project_id,
-                        connection.configuration["secret_name"],
-                        secret_revision,
-                    )
+                    await self._authentication_failed(conn, run, connection, secret_revision)
                 if custom and 200 <= response["status"] < 300:
                     await conn.execute(
                         """UPDATE integration_connections
@@ -358,6 +354,22 @@ class CodeServices:
                         secret_revision,
                     )
             return response
+
+    async def _authentication_failed(self, conn, run, connection, secret_revision):
+        await conn.execute(
+            """UPDATE integration_connections
+               SET status='needs_attention', last_error_code='authentication_failed',
+                   configuration=jsonb_set(configuration,'{access_verified}','false'),
+                   last_checked_at=now()
+               WHERE id=$1 AND configuration->>'revision'=$2
+               AND EXISTS(SELECT 1 FROM project_secrets WHERE project_id=$3
+                 AND name=$4 AND revision=$5)""",
+            connection.id,
+            connection.configuration["revision"],
+            run.project_id,
+            connection.configuration["secret_name"],
+            secret_revision,
+        )
 
     async def adapter(self, provider, operation, args, run, connection, key, *, max_response_bytes):
         service = self.integrations

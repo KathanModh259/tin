@@ -24,6 +24,7 @@ from tin_lite.integrations import (
     IntegrationAuthorizationError,
     IntegrationError,
     IntegrationService,
+    ServiceCallRefused,
 )
 from tin_lite.project_connections import configuration, request_api, request_contract
 from tin_lite.project_connections_api import router, setup_user
@@ -257,6 +258,29 @@ async def test_http_preserves_resolver_preference_and_checks_every_address(addre
         with pytest.raises(IntegrationAuthorizationError, match="not a public address"):
             await request_api(connection, SECRET, payload()["arguments"], **args)
         assert len(seen) == 1
+
+
+async def test_http_answers_without_json_are_known_outcomes_with_their_status():
+    connection = SimpleNamespace(configuration={**CONFIG, "methods": ["GET", "DELETE"]})
+    replies = iter(
+        [
+            httpx.Response(204, stream=httpx.ByteStream(b"")),
+            httpx.Response(401, stream=httpx.ByteStream(b"<html>Sign in</html>")),
+        ]
+    )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: next(replies))) as client:
+        args = dict(maximum=8000, operation_id="stable-op", client=client, resolver=public_dns)
+        delete = {"method": "DELETE", "path": "/accounts/1", "params": {}, "body": None}
+        assert await request_api(connection, SECRET, delete, **args) == {
+            "status": 204,
+            "data": None,
+        }
+        # The body is withheld, but the provider answered: never an uncertain attempt.
+        with pytest.raises(ServiceCallRefused, match="HTTP 401") as refused:
+            await request_api(connection, SECRET, payload()["arguments"], **args)
+        assert refused.value.code == "invalid_response" and refused.value.status == 401
+        assert "Sign in" not in str(refused.value)
 
 
 def google_spec(provider, capability):
@@ -582,6 +606,38 @@ async def test_oversized_service_response_is_named_settled_and_does_not_block_la
         usage = await read_run_usage(database=f.db, run=await f.db.get_run(UUID(run_id)))
         external = [o for o in usage["own"]["observations"] if o["kind"] == "connected_api"]
         assert [o["outcome"] for o in external] == ["response_received", "response_received"]
+    await service.close()
+
+
+async def test_non_json_service_answer_is_settled_and_marks_a_rejected_credential(
+    billed, monkeypatch
+):
+    f = billed
+    service, _, code, run_id = await prepared(f, monkeypatch)
+    calls = []
+
+    def wire(request):
+        calls.append(request)
+        return httpx.Response(401, stream=httpx.ByteStream(b"<html>Sign in again</html>"))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(wire)) as client:
+        code.services.client, code.services.resolver = client, public_dns
+        with pytest.raises(Exception, match="HTTP 401 with a body that is not JSON"):
+            await ActivityEnvironment().run(code.execute, run_id)
+        connection = await f.db.get_integration_connection(
+            project_id=f.project.id, provider_key=PROVIDER
+        )
+        assert connection.status == "needs_attention"
+        assert connection.last_error_code == "authentication_failed"
+        assert len(calls) == 1
+        # The answered step is settled with Tin's message, never left as an unconfirmed attempt.
+        rows = await f.db.pool.fetch(
+            """SELECT status, result FROM effect_receipts
+               WHERE operation IN ('code_service_call_v1', 'external_usage_v1')"""
+        )
+        assert len(rows) == 2 and all(row["status"] == "completed" for row in rows)
+        assert "invalid_response" in [json.loads(row["result"]).get("error") for row in rows]
+        assert "Sign in" not in str([row["result"] for row in rows])
     await service.close()
 
 
