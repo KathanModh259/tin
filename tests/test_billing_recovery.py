@@ -3,10 +3,13 @@
 from uuid import UUID, uuid4
 
 import httpx
+import pytest
 from test_billing import billed as billed
 from test_billing import fund
 from test_private_workflows import ACTOR, app, mcp, structured
 from test_procedure_publication import publication_db as publication_db
+
+from tin_lite.billing_contracts import BillingError
 
 
 async def test_saved_retry_recovers_after_last_run_is_already_pending(billed):
@@ -178,3 +181,62 @@ async def test_lost_checkout_webhook_recovers_by_verified_provider_read(billed):
     await f.payments.reconcile()
     assert (await f.billing.overview(f.project.id, ACTOR))["available_usd"] == "25.00"
     assert await f.db.pool.fetchval("SELECT count(*) FROM billing_ledger") == 1
+
+
+async def test_parked_or_failing_checkouts_do_not_starve_lost_webhook_recovery(billed):
+    f = billed
+    f.settings.codex_api_projects = {f.project.id}
+    # Session-less requests past Stripe's retry window await operator reconciliation.
+    await f.db.pool.execute(
+        """INSERT INTO billing_payments(id,workspace_id,actor_clerk_user_id,request_id,
+           amount_cents,created_at)
+           SELECT gen_random_uuid(),$1,$2,gen_random_uuid(),2500,now()-interval '25 hours'
+           FROM generate_series(1,20)""",
+        f.project.workspace_id,
+        ACTOR,
+    )
+    failing = await f.db.pool.fetchval(
+        """INSERT INTO billing_payments(id,workspace_id,actor_clerk_user_id,request_id,
+           amount_cents,created_at)
+           VALUES(gen_random_uuid(),$1,$2,gen_random_uuid(),2500,now()-interval '1 hour')
+           RETURNING id""",
+        f.project.workspace_id,
+        ACTOR,
+    )
+    payment = await f.payments.checkout(
+        workspace_id=f.project.workspace_id, actor=ACTOR, amount_cents=2500, request_id=uuid4()
+    )
+    await f.db.pool.execute(
+        "UPDATE billing_payments SET created_at=now()-interval '1 minute' WHERE id=$1",
+        UUID(payment["id"]),
+    )
+
+    def wire(request):
+        if "/products" in request.url.path:
+            return httpx.Response(500, json={})
+        assert request.method == "GET"
+        assert request.url.path == f"/v1/checkout/sessions/cs_test_{payment['id']}"
+        return httpx.Response(
+            200,
+            json={
+                "id": f"cs_test_{payment['id']}",
+                "livemode": False,
+                "currency": "usd",
+                "amount_total": 2500,
+                "mode": "payment",
+                "status": "complete",
+                "payment_status": "paid",
+                "payment_intent": f"pi_{payment['id']}",
+                "metadata": {"tin_product": "tin-lite", "tin_payment_id": payment["id"]},
+            },
+        )
+
+    f.payments.transport = httpx.MockTransport(wire)
+    # The failing request still surfaces, after every other row has been reconciled.
+    with pytest.raises(BillingError, match="Stripe could not complete"):
+        await f.payments.reconcile()
+    assert (await f.billing.overview(f.project.id, ACTOR))["available_usd"] == "25.00"
+    assert (
+        await f.db.pool.fetchval("SELECT status FROM billing_payments WHERE id=$1", failing)
+        == "pending"
+    )
