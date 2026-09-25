@@ -1346,7 +1346,10 @@ async def build_plan(inputs, site, site_text, today, generate):
     )
     asked_n = len(understanding["founder_requests"])
     if {r["index"] for r in view["requests"]} != set(range(asked_n)):
-        view = await call("view", *view_prompt(context, roles, flags, scope), VIEW_SCHEMA, 16000)
+        # Its own stable step id: reusing "view" would replay the receipted answer.
+        view = await call(
+            "view:requests", *view_prompt(context, roles, flags, scope), VIEW_SCHEMA, 16000
+        )
     unanswered = sorted(set(range(asked_n)) - {r["index"] for r in view["requests"]})
     rules = (
         f"You repair sentences in a founder's growth plan so they follow these rules.\n\n{WRITING}\n\nReturn every slot you were given, "

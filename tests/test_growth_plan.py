@@ -530,6 +530,22 @@ async def test_an_unusable_result_gets_one_replacement_under_its_own_step():
     assert result["report"]["retried_steps"] == ["scope: response was truncated"]
 
 
+async def test_a_view_that_skips_a_request_is_asked_again_under_its_own_step():
+    model = FakeModel(overrides={"view": lambda value, user: dict(value, requests=[])})
+    receipts = {}
+
+    async def receipted(step, *args):
+        # The activity replays a completed step's receipt instead of buying it again.
+        if step not in receipts:
+            receipts[step] = await model(step, *args)
+        return receipts[step]
+
+    result = await plan.build_plan(inputs(), SITE, SITE_TEXT, TODAY, receipted)
+    assert model.calls.count("view") == 1 and "view:requests" in model.calls
+    assert result["report"]["unanswered_requests"] == []
+    assert "Delivered by Organic search content" in result["plan"]
+
+
 async def test_two_unusable_results_fail_the_run_and_save_nothing():
     with pytest.raises(plan.UnusableModelResult):
         await plan.build_plan(
