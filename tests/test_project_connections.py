@@ -5,12 +5,15 @@ import base64
 import json
 from contextlib import AsyncExitStack
 from copy import deepcopy
+from importlib.util import find_spec
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
+from e2b import CommandExitException
 from fastapi import FastAPI
 from pydantic import SecretStr
 from temporalio.testing import ActivityEnvironment
@@ -20,7 +23,7 @@ from test_procedure_publication import publication_db as publication_db
 from test_workflow_code import setup, start
 
 from tin_lite.code_services import CodeServiceError, CodeServices
-from tin_lite.e2b_runtime import E2BRuntime
+from tin_lite.e2b_runtime import SERVICE_ERROR_EXIT, E2BRuntime
 from tin_lite.integrations import (
     CredentialCipher,
     IntegrationAuthorizationError,
@@ -397,9 +400,10 @@ async def test_google_service_values_are_contract_errors_before_any_receipt(
     assert reason in str(refused.value)
 
 
-async def test_code_bridge_hands_service_errors_to_authored_code(monkeypatch):
+def code_bridge(monkeypatch):
+    """A fake sandbox whose package makes `requests` bridge calls, then exits with `exit`."""
     replies, outcomes = [], []
-    package = SimpleNamespace(requests=2, reraises=False)
+    package = SimpleNamespace(requests=2, reraises=False, exit=None, result=b'{"ok": true}')
 
     async def command(cmd, **kwargs):
         if kwargs.get("on_stdout") is None:
@@ -407,11 +411,19 @@ async def test_code_bridge_hands_service_errors_to_authored_code(monkeypatch):
         for _ in range(package.requests):
             await kwargs["on_stdout"]("TIN_MODEL_REQUEST\n")
             if package.reraises and "error" in replies[-1]:
-                raise RuntimeError("fixture package let the service error escape")
+                # The runner reports only that the service error escaped, by its exit status.
+                package.exit = SERVICE_ERROR_EXIT
+                break
+        if package.exit is not None:
+            raise CommandExitException(stderr="", stdout="", exit_code=package.exit, error=None)
         return SimpleNamespace(stdout="")
 
     async def read(path, **kwargs):
-        return b'{"kind": "service"}' if path.endswith("request.json") else b'{"ok": true}'
+        if path.endswith("request.json"):
+            return b'{"kind": "service"}'
+        if isinstance(package.result, Exception):
+            raise package.result
+        return package.result
 
     async def write(path, data, **kwargs):
         if path.endswith("response.tmp"):
@@ -436,6 +448,11 @@ async def test_code_bridge_hands_service_errors_to_authored_code(monkeypatch):
         api_key="synthetic", template="default", timeout_seconds=60, egress_allow_hosts=()
     )
     run = dict(sandbox_id="fixture-code-service", packet={"timeout_seconds": 5}, model_call=service)
+    return runtime, run, replies, outcomes, package
+
+
+async def test_code_bridge_hands_service_errors_to_authored_code(monkeypatch):
+    runtime, run, replies, outcomes, package = code_bridge(monkeypatch)
     # A settled refusal reaches the package, which asks again under a new step.
     outcomes[:] = [CodeServiceError("Stripe rate-limited this read (fixture)."), {"status": 200}]
     assert await runtime.run_code_and_kill(**run) == b'{"ok": true}'
@@ -452,10 +469,40 @@ async def test_code_bridge_hands_service_errors_to_authored_code(monkeypatch):
     assert replies == [{"error": "Service response unavailable or invalid; fixture."}]
     # A run that lost its authority stops without handing anything back to authored code.
     replies.clear()
+    package.exit = None
     outcomes[:] = [CodeServiceError("The run no longer has permission.", fatal=True)]
     with pytest.raises(CodeServiceError, match="no longer has permission"):
         await runtime.run_code_and_kill(**run)
     assert replies == []
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        # The package caught the refusal, then failed or ran out of time on its own.
+        dict(exit=1),
+        # E2B could not return the result after the package had handled the refusal.
+        dict(result=RuntimeError("fixture sandbox read failed")),
+    ],
+)
+async def test_code_bridge_keeps_a_handled_service_error_out_of_later_failures(
+    monkeypatch, failure
+):
+    runtime, run, replies, outcomes, package = code_bridge(monkeypatch)
+    package.requests = 1
+    for name, value in failure.items():
+        setattr(package, name, value)
+    outcomes[:] = [CodeServiceError("Stripe rate-limited this read (fixture).")]
+    with pytest.raises(RuntimeError, match="Code workflow failed") as failed:
+        await runtime.run_code_and_kill(**run)
+    assert not isinstance(failed.value, CodeServiceError)
+    assert replies == [{"error": "Stripe rate-limited this read (fixture)."}]
+
+
+def test_code_runner_and_bridge_agree_on_the_escaped_service_error_status():
+    # code_runner imports Unix-only modules, so read its constant without importing it.
+    source = Path(find_spec("tin_lite.code_runner").origin).read_text(encoding="utf-8")
+    assert f"\nSERVICE_ERROR_EXIT = {SERVICE_ERROR_EXIT}\n" in source
 
 
 class ServiceCompute:

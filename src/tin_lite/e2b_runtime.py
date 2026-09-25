@@ -14,6 +14,7 @@ from typing import Any
 from e2b import (
     AsyncCommandHandle,
     AsyncSandbox,
+    CommandExitException,
     FileType,
     NotFoundException,
     SandboxNotFoundException,
@@ -35,6 +36,8 @@ from tin_lite.usage_capture import observe_sandbox
 logger = logging.getLogger(__name__)
 
 CONTEXT_PATH = "/home/user/.tin-lite/procedure-context.json"
+SERVICE_ERROR_EXIT = 3
+"""code_runner's exit status when authored code let a forwarded service error escape."""
 CONTEXT_ENV_MAX = 96 * 1024
 """Largest base64 context still passed as a variable, under the 128 KiB per-string cap."""
 
@@ -341,9 +344,11 @@ class E2BRuntime:
             raise
         except (CodeModelError, CodeServiceError):
             raise
-        except Exception:
-            if forwarded is not None:
-                # A package that let a service error escape fails for Tin's named reason.
+        except Exception as exc:
+            escaped = isinstance(exc, CommandExitException) and exc.exit_code == SERVICE_ERROR_EXIT
+            if forwarded is not None and escaped:
+                # The package let the service error escape, so the run fails for Tin's named
+                # reason. A package that handled it and failed later keeps the generic failure.
                 raise forwarded from None
             raise RuntimeError("Code workflow failed or exceeded its execution limits.") from None
         finally:
