@@ -276,7 +276,7 @@ class E2BRuntime:
         from tin_lite.code_models import CodeModelError
         from tin_lite.code_services import CodeServiceError
 
-        sandbox = None
+        sandbox = forwarded = None
         try:
             sandbox = await AsyncSandbox.connect(
                 sandbox_id, timeout=packet["timeout_seconds"] + 30, api_key=self._api_key
@@ -291,7 +291,7 @@ class E2BRuntime:
             buffer = ""
 
             async def model_notice(chunk):
-                nonlocal buffer
+                nonlocal buffer, forwarded
                 buffer += chunk
                 if len(buffer) > 128:
                     raise RuntimeError("Invalid code control notification.")
@@ -312,6 +312,12 @@ class E2BRuntime:
                         # A schema rejection may be handled by authored code. A corrective
                         # request needs a different step and another declared allowance.
                         response = {"error": exc.code}
+                    except CodeServiceError as exc:
+                        if exc.fatal:
+                            raise
+                        # Settled refusals and uncertain results are the package's to handle;
+                        # the gateway already blocks any step that must not be retried.
+                        forwarded, response = exc, {"error": str(exc)}
                     await sandbox.files.write(
                         "/root/tin-code/response.tmp",
                         json.dumps(response, ensure_ascii=False),
@@ -336,6 +342,9 @@ class E2BRuntime:
         except (CodeModelError, CodeServiceError):
             raise
         except Exception:
+            if forwarded is not None:
+                # A package that let a service error escape fails for Tin's named reason.
+                raise forwarded from None
             raise RuntimeError("Code workflow failed or exceeded its execution limits.") from None
         finally:
             if sandbox is not None:

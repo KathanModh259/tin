@@ -6,6 +6,7 @@ import json
 from contextlib import AsyncExitStack
 from copy import deepcopy
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import httpx
@@ -19,6 +20,7 @@ from test_procedure_publication import publication_db as publication_db
 from test_workflow_code import setup, start
 
 from tin_lite.code_services import CodeServiceError, CodeServices
+from tin_lite.e2b_runtime import E2BRuntime
 from tin_lite.integrations import (
     CredentialCipher,
     IntegrationAuthorizationError,
@@ -393,6 +395,67 @@ async def test_google_service_values_are_contract_errors_before_any_receipt(
             },
         )
     assert reason in str(refused.value)
+
+
+async def test_code_bridge_hands_service_errors_to_authored_code(monkeypatch):
+    replies, outcomes = [], []
+    package = SimpleNamespace(requests=2, reraises=False)
+
+    async def command(cmd, **kwargs):
+        if kwargs.get("on_stdout") is None:
+            return SimpleNamespace(stdout="")
+        for _ in range(package.requests):
+            await kwargs["on_stdout"]("TIN_MODEL_REQUEST\n")
+            if package.reraises and "error" in replies[-1]:
+                raise RuntimeError("fixture package let the service error escape")
+        return SimpleNamespace(stdout="")
+
+    async def read(path, **kwargs):
+        return b'{"kind": "service"}' if path.endswith("request.json") else b'{"ok": true}'
+
+    async def write(path, data, **kwargs):
+        if path.endswith("response.tmp"):
+            replies.append(json.loads(data))
+
+    async def service(_request):
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    sandbox = SimpleNamespace(
+        sandbox_id="fixture-code-service",
+        commands=SimpleNamespace(run=command),
+        files=SimpleNamespace(read=read, write=write, rename=AsyncMock()),
+        kill=AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "tin_lite.e2b_runtime.AsyncSandbox.connect", AsyncMock(return_value=sandbox)
+    )
+    runtime = E2BRuntime(
+        api_key="synthetic", template="default", timeout_seconds=60, egress_allow_hosts=()
+    )
+    run = dict(sandbox_id="fixture-code-service", packet={"timeout_seconds": 5}, model_call=service)
+    # A settled refusal reaches the package, which asks again under a new step.
+    outcomes[:] = [CodeServiceError("Stripe rate-limited this read (fixture)."), {"status": 200}]
+    assert await runtime.run_code_and_kill(**run) == b'{"ok": true}'
+    assert replies == [
+        {"error": "Stripe rate-limited this read (fixture)."},
+        {"result": {"status": 200}},
+    ]
+    # A package that lets the error escape still fails with Tin's own reason, not a generic one.
+    replies.clear()
+    package.requests, package.reraises = 1, True
+    outcomes[:] = [CodeServiceError("Service response unavailable or invalid; fixture.")]
+    with pytest.raises(CodeServiceError, match="Service response unavailable"):
+        await runtime.run_code_and_kill(**run)
+    assert replies == [{"error": "Service response unavailable or invalid; fixture."}]
+    # A run that lost its authority stops without handing anything back to authored code.
+    replies.clear()
+    outcomes[:] = [CodeServiceError("The run no longer has permission.", fatal=True)]
+    with pytest.raises(CodeServiceError, match="no longer has permission"):
+        await runtime.run_code_and_kill(**run)
+    assert replies == []
 
 
 class ServiceCompute:

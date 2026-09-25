@@ -79,7 +79,15 @@ ARGUMENT_CHECKS = {
 
 
 class CodeServiceError(ValueError):
-    """Fixed safe errors; never supplier exceptions, bodies, URLs or authentication."""
+    """Fixed safe errors; never supplier exceptions, bodies, URLs or authentication.
+
+    Authored code receives the message as a ValueError from the call, unless `fatal`: the run
+    itself lost its authority, so it stops without handing anything back.
+    """
+
+    def __init__(self, message, *, fatal=False):
+        super().__init__(message)
+        self.fatal = fatal
 
 
 def _too_large(service):
@@ -154,7 +162,7 @@ class CodeServices:
                 await self.authorize(conn=conn, run=run, workflow=workflow, require_budget=False)
             except CodeModelError:
                 raise CodeServiceError(
-                    "The run no longer has permission to use services."
+                    "The run no longer has permission to use services.", fatal=True
                 ) from None
             requirement = IntegrationRequirement(service.provider_key, service.capabilities)
             try:
