@@ -325,6 +325,53 @@ async def test_external_failure_leaves_a_hidden_project_and_a_retryable_receipt(
     assert (await db.get_effect(receipt_key(f.project.id, request_id))).status == "completed"
 
 
+async def test_a_retry_closes_the_executions_and_sandboxes_a_failed_attempt_left_open(
+    publication_db,
+):
+    f = await fixture(publication_db)
+    work = await seed_work(f)
+    earlier_id = uuid4()
+    await f.db.pool.execute(
+        """INSERT INTO workflow_runs (id, project_id, workflow_id, executor, definition_commit_sha,
+                temporal_workflow_id, thread_id, generation, fencing_token, status, lease_active,
+                sandbox_id, expected_head_sha, ephemeral_branch, review_required, finished_at)
+           SELECT $1, project_id, workflow_id, executor, definition_commit_sha, $2, $3, 1, 1,
+                  'stopped', false, 'sbx-earlier', expected_head_sha, $4, false,
+                  now() - interval '1 day'
+           FROM workflow_runs WHERE id = $5""",
+        earlier_id,
+        f"codex.procedure:{earlier_id}",
+        str(earlier_id),
+        f"procedures/{earlier_id}/1",
+        work.run_id,
+    )
+    temporal = f.runtime.temporal
+    handle = temporal.get_workflow_handle.return_value
+    handle.terminate.side_effect = RPCError("down", RPCStatusCode.UNAVAILABLE, b"")
+    f.runtime.sandboxes.kill.side_effect = TimeoutError()
+    request_id = uuid4()
+
+    with pytest.raises(ProjectDeletionPending, match="kill sandbox sbx-1"):
+        await delete_project(f.runtime, project_id=f.project.id, actor=ACTOR, request_id=request_id)
+
+    # The run is already stopped, but its execution and sandbox are still open.
+    handle.terminate.side_effect = None
+    f.runtime.sandboxes.kill.side_effect = None
+    temporal.get_workflow_handle.reset_mock()
+    f.runtime.sandboxes.kill.reset_mock()
+    result = await delete_project(
+        f.runtime, project_id=f.project.id, actor=ACTOR, request_id=request_id
+    )
+
+    assert result["stopped_runs"] == 0
+    terminated = {call.args[0] for call in temporal.get_workflow_handle.call_args_list}
+    assert terminated == {
+        f"codex.procedure:{work.run_id}",
+        f"tin-scheduled-dispatch:{work.configured_id}",
+    }
+    f.runtime.sandboxes.kill.assert_awaited_once_with("sbx-1")
+
+
 async def test_already_closed_temporal_and_storage_state_is_tolerated(publication_db):
     f = await fixture(publication_db)
     await seed_work(f)

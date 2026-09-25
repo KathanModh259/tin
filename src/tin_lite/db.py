@@ -5974,6 +5974,33 @@ class Database:
             for row in rows
         ]
 
+    async def runs_stopped_by_deletion(
+        self, conn: asyncpg.Connection, *, project_id: UUID
+    ) -> list[StoppedRunHandle]:
+        """The runs a deletion stopped, on this attempt or an earlier one.
+
+        The stop commits before the external cleanup, so a retry finds these runs already
+        stopped; closing them again is safe and finishes what a failed attempt left open.
+        """
+        rows = await conn.fetch(
+            """
+            SELECT run.id, run.temporal_workflow_id, run.sandbox_id
+            FROM workflow_runs run JOIN projects project ON project.id = run.project_id
+            WHERE run.project_id = $1 AND run.status = 'stopped'
+              AND run.finished_at >= project.deleted_at
+            ORDER BY run.created_at, run.id
+            """,
+            project_id,
+        )
+        return [
+            StoppedRunHandle(
+                run_id=row["id"],
+                temporal_workflow_id=row["temporal_workflow_id"],
+                sandbox_id=row["sandbox_id"],
+            )
+            for row in rows
+        ]
+
     async def archive_project_workflows_for_deletion(
         self, conn: asyncpg.Connection, *, project_id: UUID
     ) -> list[UUID]:
