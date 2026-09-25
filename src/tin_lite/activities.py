@@ -364,7 +364,8 @@ class TinActivities:
         )
         if not created and run.status == RunStatus.FAILED:
             return {}
-        if created:
+        # A retry can find the run it created before failing; it is not admitted yet.
+        if created or run.status == RunStatus.PENDING:
             if evaluation.blocking:
                 # A schedule cannot ask the founder to run something first; the failed run
                 # projection is how the missing prerequisite becomes visible.
