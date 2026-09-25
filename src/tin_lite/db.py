@@ -1936,6 +1936,9 @@ class Database:
                 """
                 UPDATE project_workflows
                 SET name = $3, inputs = $4::jsonb, schedule = $5::jsonb,
+                    -- A skip names one occurrence of the old calendar; a new one disarms it.
+                    skip_scheduled_for = CASE WHEN schedule IS DISTINCT FROM $5::jsonb
+                        THEN NULL ELSE skip_scheduled_for END,
                     status = 'provisioning', last_error = NULL,
                     settings_revision = settings_revision + 1, updated_at = now()
                 WHERE id = $1 AND project_id = $2 AND status <> 'archived'
