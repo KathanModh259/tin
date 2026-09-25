@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -20,7 +22,11 @@ from tin_lite.auth import AuthContext, require_user
 from tin_lite.db import Database, apply_migrations
 from tin_lite.domain import RunStatus, WorkflowRun
 from tin_lite.mcp_server import _run_allowed_actions, create_mcp_app
-from tin_lite.project_task_control import project_task_allowed_actions, project_task_view
+from tin_lite.project_task_control import (
+    approve_project_task,
+    project_task_allowed_actions,
+    project_task_view,
+)
 
 MEMBER = "user_member"
 OUTSIDER = "user_outsider"
@@ -443,6 +449,78 @@ async def test_an_apply_that_fails_at_once_can_be_approved_again(task_db, monkey
     approved = await call(h, "approve_workflow_run", run_id=str(run.id))
     assert (approved["status"], approved["task"]["phase"]) == ("running", "applying")
     assert h.handle.signal.await_count == 3
+
+
+async def test_a_cancelled_approve_signal_returns_the_task_to_review() -> None:
+    earlier = "The last approval could not reach the task."
+    runs = {"current": task_run(task_phase="review", task_question=None, error_message=earlier)}
+
+    class Database:
+        async def get_run(self, run_id):
+            return runs["current"]
+
+        async def has_project_access(self, *, project_id, clerk_user_id):
+            return clerk_user_id == MEMBER
+
+        async def begin_task_approval(self, *, run_id, clerk_user_id):
+            runs["current"] = replace(
+                runs["current"],
+                status=RunStatus.RUNNING,
+                task_phase="applying",
+                error_message=None,
+            )
+            return runs["current"]
+
+        async def reopen_task_review(self, *, run_id, error_message=None):
+            runs["current"] = replace(
+                runs["current"],
+                status=RunStatus.NEEDS_INPUT,
+                task_phase="review",
+                error_message=error_message,
+            )
+
+    handle = SimpleNamespace(signal=AsyncMock(side_effect=asyncio.CancelledError()))
+    runtime = SimpleNamespace(
+        database=Database(),
+        temporal=SimpleNamespace(get_workflow_handle=Mock(return_value=handle)),
+    )
+    run_id = runs["current"].id
+
+    with pytest.raises(asyncio.CancelledError):
+        await approve_project_task(runtime=runtime, run_id=run_id, clerk_user_id=MEMBER)
+    reopened = runs["current"]
+    assert (reopened.status, reopened.task_phase) == (RunStatus.NEEDS_INPUT, "review")
+    assert reopened.error_message == earlier
+
+    handle.signal.side_effect = None
+    approved = await approve_project_task(runtime=runtime, run_id=run_id, clerk_user_id=MEMBER)
+    assert (approved.status, approved.task_phase) == (RunStatus.RUNNING, "applying")
+    assert handle.signal.await_count == 2
+
+
+async def test_a_cancelled_approval_can_be_approved_again(task_db, monkeypatch):
+    h = await harness(task_db, monkeypatch)
+    h.token.subject = MEMBER
+    diff = {"files": [{"path": "docs/charter.md", "state": "added"}], "sha256": "0" * 64}
+    run = await seed_task(task_db, phase="review", question=None, task_diff=diff)
+    earlier = "The last approval could not reach the task."
+    await task_db.pool.execute(
+        "UPDATE workflow_runs SET error_message = $2 WHERE id = $1", run.id, earlier
+    )
+
+    # An MCP disconnect or shutdown cancels the approval while the signal is in flight.
+    h.handle.signal.side_effect = asyncio.CancelledError()
+    with pytest.raises(asyncio.CancelledError):
+        await approve_project_task(runtime=h.runtime, run_id=run.id, clerk_user_id=MEMBER)
+    reopened = await task_db.get_run(run.id)
+    assert reopened is not None
+    assert (reopened.status, reopened.task_phase) == (RunStatus.NEEDS_INPUT, "review")
+    assert reopened.error_message == earlier
+
+    h.handle.signal.side_effect = None
+    approved = await call(h, "approve_workflow_run", run_id=str(run.id))
+    assert (approved["status"], approved["task"]["phase"]) == ("running", "applying")
+    assert h.handle.signal.await_count == 2
 
 
 async def test_mcp_approves_reviewed_task_changes_like_the_web(task_db, monkeypatch):

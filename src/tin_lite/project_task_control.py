@@ -8,6 +8,7 @@ surfaces never drift. Every read here is the Postgres projection; nothing reads 
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -259,7 +260,13 @@ async def approve_project_task(*, runtime, run_id: UUID, clerk_user_id: str) -> 
     try:
         handle = runtime.temporal.get_workflow_handle(run.temporal_workflow_id)
         await handle.signal("approve")
-    except Exception as exc:
-        await runtime.database.reopen_task_review(run_id=run_id)
-        raise ProjectTaskDeliveryError("task approval was not accepted") from exc
+    except BaseException as exc:
+        # Any interruption, including a cancelled caller, hands the task back to review with
+        # the note approval cleared; otherwise it stays applying with no approve delivered.
+        await asyncio.shield(
+            runtime.database.reopen_task_review(run_id=run_id, error_message=run.error_message)
+        )
+        if isinstance(exc, Exception):
+            raise ProjectTaskDeliveryError("task approval was not accepted") from exc
+        raise
     return approving
