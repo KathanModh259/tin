@@ -6625,7 +6625,7 @@ class Database:
                 heartbeat_at = now()
             WHERE id = $1
               AND (NOT review_required OR review_decision = 'approved')
-              AND status <> 'superseded'
+              AND status NOT IN ('failed', 'stopped', 'superseded')
             RETURNING id
             """,
             run_id,
@@ -6634,6 +6634,11 @@ class Database:
             artifact_path,
         )
         if projected is None:
+            status = await self.pool.fetchval(
+                "SELECT status FROM workflow_runs WHERE id = $1", run_id
+            )
+            if status in {"failed", "stopped", "superseded"}:
+                raise SideEffectConflictError("run cannot complete in its current state")
             raise RuntimeError("run cannot complete before required human review")
         await self._track_run(run_id, "run_succeeded", artifact_path=artifact_path)
 
