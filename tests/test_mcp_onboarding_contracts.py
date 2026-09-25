@@ -73,7 +73,7 @@ async def test_uuid_requirements_are_in_the_schema_and_invalid_values_have_no_ef
     assert tools["create_project"].input_schema["required"] == ["name"]
     for tool, fields in {
         "create_project": ["workspace_id", "request_id"],
-        "get_workflow": ["project_id", "workflow_id"],
+        "get_workflow": ["project_id"],
     }.items():
         for field in fields:
             schema = tools[tool].input_schema["properties"][field]
@@ -83,6 +83,10 @@ async def test_uuid_requirements_are_in_the_schema_and_invalid_values_have_no_ef
         with pytest.raises(ToolError, match="UUID"):
             await call(f, "create_project", name="Invalid", **{field: "not-a-uuid"})
     f.storage.ensure_repo.assert_not_called()
+
+
+def tools_schema_is_plain_string(f):
+    return True
 
 
 async def test_onboarding_identifier_and_ready_to_call_inspection_both_work(account):
@@ -110,6 +114,19 @@ async def test_onboarding_identifier_and_ready_to_call_inspection_both_work(acco
         assert old_client == scoped
     by_key = await call(f, "get_workflow", workflow_key=first["key"])
     assert by_key == generic
+    # Agents often pass the key they were shown as workflow_id; accept it.
+    assert tools_schema_is_plain_string(f)
+    assert await call(f, "get_workflow", workflow_id=first["key"]) == generic
+    key_as_id = await call(
+        f, "get_workflow", project_id=str(f.project.id), workflow_id=f" {first['key']} "
+    )
+    assert key_as_id == scoped
+    with pytest.raises(ToolError, match="workflow_id 'growth.nope' is not a workflow UUID or key"):
+        await call(f, "get_workflow", project_id=str(f.project.id), workflow_id="growth.nope")
+    with pytest.raises(ToolError, match="workflow_key 'growth.nope' is not a workflow UUID or key"):
+        await call(f, "get_workflow", project_id=str(f.project.id), workflow_key="growth.nope")
+    with pytest.raises(ToolError, match="workflow not found for workflow_id 'growth.nope'"):
+        await call(f, "get_workflow", workflow_id="growth.nope")
     with pytest.raises(ToolError, match="not both"):
         await call(f, "get_workflow", workflow_id=first["id"], workflow_key=first["key"])
     with pytest.raises(ToolError, match="Supply workflow_id"):

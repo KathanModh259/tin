@@ -24,6 +24,7 @@ from tin_lite.private_workflows import (
     PrivateWorkflowError,
     PrivateWorkflows,
     authoring_guide,
+    private_execution_blocker,
     private_execution_ready,
     validate_private_definition,
 )
@@ -174,6 +175,21 @@ async def test_contribution_readme_copy_validates_and_activates_through_mcp(
     valid = structured(await server.call_tool("validate_workflow_package", chosen))
     assert valid["valid"] and valid["runtime_available"]
     assert sorted(valid["files"]) == sorted(files)
+    # Agents often select the package directory rather than its manifest.
+    for directory in (
+        "workflow_packages/custom.example_play",
+        "workflow_packages/custom.example_play/",
+    ):
+        by_directory = {**chosen, "path": directory}
+        assert (
+            structured(await server.call_tool("validate_workflow_package", by_directory)) == valid
+        )
+    with pytest.raises(
+        ToolError, match=r"invalid: path 'reports/x\.md' must be workflow_packages/custom\.<key>/"
+    ):
+        await server.call_tool("validate_workflow_package", {**chosen, "path": "reports/x.md"})
+    with pytest.raises(ToolError, match="invalid: revision must be a lowercase 40-character"):
+        await server.call_tool("validate_workflow_package", {**chosen, "revision": "main"})
     assert await private_rows(f) == []
     activation = {**chosen, "request_id": str(uuid4()), "expected_revision": None}
     first = structured(await server.call_tool("activate_workflow_package", activation))
@@ -453,11 +469,13 @@ async def test_open_gate_admits_unlisted_projects_but_keeps_the_isolated_templat
     run = SimpleNamespace(project_id=f.project.id, started_by_clerk_user_id=ACTOR)
     await worker._check_private_attempt(run, workflow)
     f.settings.e2b_isolated_template = None
-    with pytest.raises(PrivateWorkflowError, match="not enabled"):
+    with pytest.raises(PrivateWorkflowError, match="no isolated runtime configured"):
         await worker._check_private_attempt(run, workflow)
     f.settings.e2b_isolated_template = "isolated-test"
     f.settings.private_workflows_open = False
-    with pytest.raises(PrivateWorkflowError, match="not enabled"):
+    with pytest.raises(
+        PrivateWorkflowError, match="not enabled for this project: it is not admitted"
+    ):
         await worker._check_private_attempt(run, workflow)
 
 
@@ -651,3 +669,8 @@ def test_execution_readiness_accepts_the_list_or_the_open_gate():
     assert private_execution_ready(opened, project)
     opened.e2b_isolated_template = None
     assert not private_execution_ready(opened, project)
+    assert "not admitted to private workflow execution" in private_execution_blocker(
+        unlisted, project
+    )
+    assert "no isolated runtime" in private_execution_blocker(opened, project, "activation")
+    assert private_execution_blocker(listed, project) is None

@@ -107,6 +107,32 @@ def test_declared_model_routes_reject_unsupported_authority(change):
         validate_code_definition(body)
 
 
+def test_model_route_errors_say_whether_the_shape_or_the_model_is_wrong():
+    from tin_lite.private_workflows import authoring_guide
+
+    extra = definition()
+    extra["code"]["model_routes"]["classification"]["capabilities"] = ["json"]
+    with pytest.raises(
+        ValueError,
+        match="route 'classification' keys must be exactly provider, model, max_calls, "
+        "max_input_bytes, max_output_tokens",
+    ):
+        validate_code_definition(extra)
+    unknown = definition()
+    unknown["code"]["model_routes"]["classification"]["model"] = "gpt-5"
+    with pytest.raises(
+        ValueError,
+        match="unsupported or unpriced model; supported provider/model pairs: "
+        "openai/gpt-6-luna, openai/gpt-6-sol",
+    ):
+        validate_code_definition(unknown)
+    guide = authoring_guide(settings=SimpleNamespace(), project_id=uuid4())
+    assert guide["code_contract"]["models"]["routes"] == [
+        {"provider": "openai", "model": "gpt-6-luna"},
+        {"provider": "openai", "model": "gpt-6-sol"},
+    ]
+
+
 @pytest.mark.parametrize(
     "change",
     [

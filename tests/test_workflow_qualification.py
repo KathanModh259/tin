@@ -481,7 +481,10 @@ async def test_paid_case_checks_caller_limit_and_requires_enforced_billing(publi
         request_id=uuid4(),
         maximum_usd="4",
     )
-    with pytest.raises(QualificationError, match="exceeds"):
+    with pytest.raises(
+        QualificationError,
+        match=r"needs maximum_usd of at least \$5\.00 \(you authorized \$4\.00\)",
+    ):
         await start_case(f, selection)
     selection.maximum_usd = "5"
     with pytest.raises(QualificationError, match="enforced run budgets"):
