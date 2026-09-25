@@ -207,6 +207,36 @@ async def test_task_recovery_preserves_direction_received_after_checkpoint(bille
     assert sandboxes.create.await_count == sandboxes.run_task_and_kill.await_count == 1
 
 
+async def test_task_transcript_keeps_a_queued_direction_behind_progress_events(billed, monkeypatch):
+    f = billed
+    run, activities, sandboxes = await task_fixture(f, monkeypatch)
+    direction = await f.db.append_task_entry(
+        run_id=run.id,
+        kind="direction",
+        source="founder",
+        content="Name the audience.",
+        author_clerk_user_id=ACTOR,
+    )
+    # A busy turn records two progress events per command after the direction was queued.
+    for index in range(60):
+        await f.db.append_task_event(run_id=run.id, entry_id=uuid4(), content=f"Step {index}.")
+    sandboxes.run_task_and_kill.return_value = SandboxTaskResult(
+        outcome="completed", summary="Ready", message="Summary", question=None, has_changes=False
+    )
+    payload = {"run_id": str(run.id), "turn_number": "1"}
+    assert await activities.run_project_task_turn(payload) == "completed"
+    supplied = sandboxes.run_task_and_kill.await_args.kwargs["run_input"]
+    assert {
+        "source": "founder",
+        "kind": "direction",
+        "content": "Name the audience.",
+    } in supplied.context["transcript"]
+    assert all(item["kind"] != "event" for item in supplied.context["transcript"])
+    assert str(direction.id) in supplied.context_delivery_ids
+    entries = {entry.id: entry for entry in await f.db.list_task_entries(run_id=run.id)}
+    assert entries[direction.id].delivered_at is not None
+
+
 async def test_historical_task_keeps_oauth(billed, monkeypatch):
     run, _, _ = await task_fixture(billed, monkeypatch)
     # An old unbilled paused run has no API budget, even when the project is now enabled.

@@ -4241,10 +4241,14 @@ class TinActivities:
                     and item.kind in {"direction", "answer"}
                     and item.delivered_at is None
                 }
+                # Progress events never crowd out the conversation, and every entry this turn
+                # will mark delivered is supplied however long ago it was queued.
+                conversation = [item for item in entries if item.kind != "event"]
+                recent_ids = {item.id for item in conversation[-50:]}
                 transcript = [
                     {"source": item.source, "kind": item.kind, "content": item.content}
-                    for item in entries[-50:]
-                    if item.kind != "event"
+                    for item in conversation
+                    if item.id in recent_ids or item.id in context_delivery_ids
                 ]
                 instruction = str((run.input or {}).get("instruction", "")).strip()
                 activity_attempt = activity.info().attempt
