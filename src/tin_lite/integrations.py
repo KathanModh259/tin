@@ -3508,14 +3508,16 @@ class IntegrationService:
         existing = await self._database.get_integration_connection(
             project_id=project_id, provider_key=ADS_PROVIDER
         )
-        if (
-            existing is not None
-            and existing.external_account_id not in {None, account}
-            and existing.configuration.get("link_status") == "active"
-        ):
-            raise IntegrationAuthorizationError(
-                "Disconnect the linked Google Ads account before connecting another one"
-            )
+        if existing is not None and existing.external_account_id not in {None, account}:
+            if existing.configuration.get("link_status") == "pending":
+                # The old invitation may have been accepted since Tin last checked it.
+                existing = await self.google_ads_link_status(project_id=project_id)
+            if existing.configuration.get("link_status") == "active":
+                raise IntegrationAuthorizationError(
+                    "Disconnect the linked Google Ads account before connecting another one"
+                )
+            # The overwrite below forgets the old account, so withdraw its invitation first.
+            await self._cancel_google_ads_link(existing)
         configuration = {
             **(dict(existing.configuration) if existing is not None else {}),
             "customer_id": account,

@@ -2992,6 +2992,58 @@ async def test_connect_google_ads_already_invited_falls_back_to_the_link_status(
 
 
 @pytest.mark.asyncio
+async def test_connect_google_ads_to_another_account_cancels_the_pending_invitation() -> None:
+    backend = AdsBackend()
+    service, _ = ads_service(backend)
+    await service.connect_google_ads(
+        project_id=PROJECT_ID, customer_id=ADS_CID, clerk_user_id=USER_ID
+    )
+    backend.requests.clear()
+    connection = await service.connect_google_ads(
+        project_id=PROJECT_ID, customer_id="222-222-2222", clerk_user_id=USER_ID
+    )
+    operations = [
+        body["operation"]
+        for path, body, _ in backend.requests
+        if path.endswith("customerClientLinks:mutate")
+    ]
+    assert operations == [
+        {
+            "update": {
+                "resourceName": f"customers/{ADS_MCC}/customerClientLinks/{ADS_CID}~555",
+                "status": "CANCELED",
+            },
+            "updateMask": "status",
+        },
+        {"create": {"clientCustomer": "customers/2222222222", "status": "PENDING"}},
+    ]
+    assert connection.external_account_id == "2222222222"
+    assert connection.configuration["link_status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_connect_google_ads_refuses_another_account_once_the_invitation_was_accepted() -> (
+    None
+):
+    backend = AdsBackend()
+    service, database = ads_service(backend)
+    await service.connect_google_ads(
+        project_id=PROJECT_ID, customer_id=ADS_CID, clerk_user_id=USER_ID
+    )
+    # The founder accepted in Google Ads, but Tin has not checked the link since.
+    backend.link_status = "ACTIVE"
+    backend.requests.clear()
+    with pytest.raises(IntegrationAuthorizationError, match="Disconnect the linked"):
+        await service.connect_google_ads(
+            project_id=PROJECT_ID, customer_id="222-222-2222", clerk_user_id=USER_ID
+        )
+    assert not any(path.endswith("customerClientLinks:mutate") for path, _, _ in backend.requests)
+    connection = database.connections[(PROJECT_ID, ADS_PROVIDER)]
+    assert connection.external_account_id == ADS_CID
+    assert connection.configuration["link_status"] == "active"
+
+
+@pytest.mark.asyncio
 async def test_connect_google_ads_maps_provider_refusals_to_founder_messages() -> None:
     backend = AdsBackend()
     backend.link_error = ("managerLinkError", "TOO_MANY_INVITES")
