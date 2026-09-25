@@ -398,6 +398,29 @@ def test_report_opens_with_the_handshake_and_names_what_runs() -> None:
     }
 
 
+def test_report_names_the_first_run_date_in_the_founder_timezone() -> None:
+    # Monday 09:00 in Sydney is still Sunday in UTC.
+    setup = {
+        "plan_revision": "d" * 40,
+        "timezone": "Australia/Sydney",
+        "links": ui_links("https://lite.tin.computer", uuid4()),
+        "actions": [
+            {
+                "key": "visibility.audit",
+                "mode": "weekly",
+                "weekdays": ["monday"],
+                "local_time": "09:00",
+                "status": "scheduled",
+                "next_run_at": "2026-09-27T23:00:00+00:00",
+            }
+        ],
+    }
+
+    text = render_report(setup, titles={"visibility.audit": "Audit AI visibility"})
+
+    assert "- **Audit AI visibility**, Monday at 09:00; next on 2026-09-28." in text
+
+
 def test_priority_fills_hours_budget_and_urgency_unless_known() -> None:
     assert apply_priority({"priority": "fun"}) == {
         "priority": "fun",

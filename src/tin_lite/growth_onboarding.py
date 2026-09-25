@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from typing import Any
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from tin_lite.domain import GROWTH_ONBOARDING_PLAN_PATH, GROWTH_ONBOARDING_PLAN_WORKFLOW_NAME
 
@@ -780,6 +782,13 @@ def _when(action: dict[str, Any]) -> str:
     return "once, starting now"
 
 
+def _local_date(value: Any, zone: ZoneInfo) -> str:
+    """next_run_at is stored in UTC; the founder reads the date where the schedule runs."""
+    if not value:
+        return ""
+    return datetime.fromisoformat(str(value)).astimezone(zone).date().isoformat()
+
+
 def _lands(action: dict[str, Any], delivery: dict[str, Any] | None) -> str:
     lands = expectation(action["key"])["lands"]
     if action["key"] in CONTENT_DRAFT_KEYS:
@@ -943,6 +952,7 @@ def render_report(setup: dict[str, Any], *, titles: dict[str, str]) -> str:
     scheduled = [a for a in actions if a.get("status") == "scheduled"]
     started = [a for a in actions if a.get("status") == "started"]
     delivery = setup.get("delivery")
+    zone = ZoneInfo(setup.get("timezone") or "UTC")
 
     def title(action: dict[str, Any]) -> str:
         return titles.get(action["key"], action["key"])
@@ -961,7 +971,7 @@ def render_report(setup: dict[str, Any], *, titles: dict[str, str]) -> str:
         lines.append("Nothing could start; see above.")
     for a in scheduled:
         lines.append(
-            f"- **{title(a)}**, {_when(a)}; next on {str(a.get('next_run_at', ''))[:10]}. "
+            f"- **{title(a)}**, {_when(a)}; next on {_local_date(a.get('next_run_at'), zone)}. "
             f"Lands in {_lands(a, delivery)}."
         )
     for a in started:
