@@ -95,7 +95,12 @@ class BillingService:
         )
 
     async def ensure_hosted_project(self, conn, project_id):
-        """Hosted policy only. Preserve existing ownership, credits and spending limits."""
+        """Hosted policy only. Preserve existing ownership, credits and spending limits.
+
+        The default includes standing schedule authority equal to the per-run limit: credits
+        are checked on every paid step and the monthly limit caps total spend. An admin can
+        still clear it in Billing to keep paid scheduled runs off.
+        """
         if not getattr(self.settings, "billing_hosted_defaults_enabled", False):
             return
         workspace_id = await conn.fetchval(
@@ -116,8 +121,8 @@ class BillingService:
         )
         await conn.execute(
             """INSERT INTO billing_project_policies(project_id, workspace_id, per_run_nanos,
-                monthly_nanos, concurrency, revision)
-            VALUES($1,$2,10000000000,10000000000,1,1)
+                monthly_nanos, concurrency, schedule_max_nanos, revision)
+            VALUES($1,$2,10000000000,10000000000,1,10000000000,1)
             ON CONFLICT(project_id) DO NOTHING""",
             project_id,
             workspace_id,
