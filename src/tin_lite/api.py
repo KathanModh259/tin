@@ -144,6 +144,7 @@ router.include_router(project_connections_router)
 router.include_router(public_catalog_router)
 logger = logging.getLogger(__name__)
 AUTHENTICATED_USER = Depends(require_user)
+SEARCH_PATHS = Query(default=None, max_length=100)
 
 
 @router.post("/api/events/lock-page", status_code=204)
@@ -2249,7 +2250,7 @@ async def search_project_files(
     request: Request,
     query: str = Query(min_length=1, max_length=500),
     revision: str | None = Query(default=None, pattern=r"^[0-9a-f]{40}$"),
-    path: list[str] | None = None,
+    path: list[str] | None = SEARCH_PATHS,
     limit: int = Query(default=50, ge=1, le=100),
     user: AuthContext = AUTHENTICATED_USER,
 ) -> ProjectFileSearchView:
