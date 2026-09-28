@@ -14,6 +14,9 @@ export const SECTIONS = [
   "What it reads from Tin instead of asking the founder",
   "How you tested it",
 ];
+// Required but with no minimum length. Pasted output may carry its own headings, so the
+// section runs on through a <details> block or code fence.
+export const OUTPUT_SECTION = "Example output";
 
 export const REASON_STEPS = {
   no_tin_account:
@@ -51,11 +54,31 @@ function sectionText(body, heading) {
   const start = lines.findIndex((line) => line.replace(/^#+\s*/, "").trim() === heading);
   if (start < 0 || !/^#{2,4}\s/.test(lines[start])) return null;
   const rest = [];
+  let details = 0;
+  let fence = null;
   for (const line of lines.slice(start + 1)) {
-    if (/^#{1,4}\s/.test(line)) break;
+    const marker = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (fence) {
+      if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length) fence = null;
+    } else if (marker) {
+      fence = marker[1];
+    } else {
+      if (!details && /^#{1,4}\s/.test(line)) break;
+      details += (line.match(/<details[\s>]/gi) || []).length;
+      details = Math.max(0, details - (line.match(/<\/details>/gi) || []).length);
+    }
     rest.push(line);
   }
   return rest.join("\n").replace(/<!--[\s\S]*?-->/g, "").trim();
+}
+
+function outputText(body) {
+  const content = sectionText(body, OUTPUT_SECTION);
+  if (content === null) return null;
+  return content
+    .replace(/<summary>[\s\S]*?<\/summary>/gi, "")
+    .replace(/<\/?details[^>]*>/gi, "")
+    .trim();
 }
 
 export function runId(body) {
@@ -108,6 +131,12 @@ export function structureProblems({ files, body, requireRun = true }) {
     problems.push(
       "These template sections are missing or nearly empty: " +
         empty.map((heading) => `“${heading}”`).join(", ") + ".",
+    );
+  }
+  if (!outputText(text)) {
+    problems.push(
+      `The “${OUTPUT_SECTION}” section is missing or empty. Paste the output of the run you ` +
+        "cite, inside its collapsed block.",
     );
   }
   return problems;

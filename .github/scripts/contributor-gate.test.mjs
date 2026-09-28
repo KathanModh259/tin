@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  OUTPUT_SECTION,
   REASON_STEPS,
   SECTIONS,
   closingComment,
@@ -12,11 +13,18 @@ import {
 
 const RUN = "0b7f1c2e-4d5a-4b6c-8d9e-0f1a2b3c4d5e";
 const filled = "A founder with a developer tool who wants conference talks booked each quarter.";
-const BODY = [
-  "## Workflow contribution",
-  `Tin run ID: ${RUN}`,
-  ...SECTIONS.flatMap((heading) => [`### ${heading}`, "<!-- guidance -->", filled]),
-].join("\n");
+const collapsed = (output) =>
+  ["<details>", "<summary>Output of the cited run</summary>", "", output, "", "</details>"].join("\n");
+const withOutput = (output) =>
+  [
+    "## Workflow contribution",
+    `Tin run ID: ${RUN}`,
+    ...SECTIONS.flatMap((heading) => [`### ${heading}`, "<!-- guidance -->", filled]),
+    `### ${OUTPUT_SECTION}`,
+    "<!-- paste guidance -->",
+    collapsed(output),
+  ].join("\n");
+const BODY = withOutput("# Talks shortlist\n\n## Picks\n\n1. DevOpsDays Berlin");
 const PACKAGE_FILES = [
   { filename: "workflow_packages/outreach.talks/workflow.json", status: "added" },
   { filename: "workflow_packages/outreach.talks/PROMPT.md", status: "added" },
@@ -53,13 +61,28 @@ test("several packages, reserved keys and missing namespaces are rejected", () =
   assert.match(problems, /isn't a valid key/);
 });
 
-test("the untouched template and a missing run ID are both reported", () => {
-  const template = SECTIONS.map((heading) => `### ${heading}\n<!-- say it here -->`).join("\n");
+test("the untouched template and a missing run ID are all reported", () => {
+  const template = [
+    ...SECTIONS.map((heading) => `### ${heading}\n<!-- say it here -->`),
+    `### ${OUTPUT_SECTION}\n<!-- paste guidance -->\n${collapsed("<!-- paste here -->")}`,
+  ].join("\n");
   const problems = structureProblems({ files: PACKAGE_FILES, body: template });
-  assert.equal(problems.length, 2);
+  assert.equal(problems.length, 3);
   assert.match(problems[0], /Tin run ID/);
   assert.match(problems[1], /missing or nearly empty/);
+  assert.match(problems[2], /Example output/);
   assert.equal(runId("Tin run ID: not-a-run"), null);
+});
+
+test("example output is required, however short, and may carry its own headings", () => {
+  const problems = (body) => structureProblems({ files: PACKAGE_FILES, body });
+  const removed = BODY.slice(0, BODY.indexOf(`### ${OUTPUT_SECTION}`));
+  assert.match(problems(removed).join("\n"), /Example output/);
+  assert.deepEqual(problems(withOutput("ok")), []);
+  const fenced = withOutput("```markdown\n## How you tested it\n```");
+  assert.deepEqual(problems(fenced), []);
+  // A heading after the collapsed block ends the section.
+  assert.match(problems(`${withOutput("")}\n## Notes\nLeft the Product Hunt part out.`).join("\n"), /Example output/);
 });
 
 test("every reason code has its own next step in the closing comment", () => {

@@ -40,10 +40,13 @@ comment listing what's missing unless all of these hold:
      the description.
    - The workflow section of the pull request template filled in, starting with
      `Tin run ID: <uuid>`.
+   - The output of that same run pasted under **Example output**, inside the collapsed
+     block: the report or files it wrote, not a summary or an earlier run.
 
 Tin answers the gate with pass or fail and reason codes only. It doesn't share your project,
-files or run output. Invite the reviewing maintainer to the project if you want them to see
-the run.
+files or run output, so the pasted output is what reviewers read. The description is public:
+remove anything private from it before pasting. Invite the reviewing maintainer to the
+project if you want them to see the full run.
 
 If the gate closes your pull request, fix what the comment lists and open a new one.
 
@@ -98,5 +101,7 @@ If a person asks you to write a Tin workflow and open a pull request:
   yourself. Don't open the pull request on their behalf until a run of the `custom.*` copy
   has succeeded on their real project.
 - Read the output of that run with them and fix what's wrong before submitting.
+- Paste the output of the run you cite under **Example output**. If you changed the
+  package after reading it, run it again and cite and paste the new run.
 - Write the pull request description from what actually happened. Don't paste a generic
   template answer.
