@@ -173,7 +173,13 @@ class Script:
         self.lookup_found = False
         self.enable_lost = False
         self.status_after_enable = None
+        self.sent = []
         self.calls = []
+
+    def named(self, query, operation):
+        """Google finds a resource only by the exact name its create carried."""
+        names = [op[operation]["create"]["name"] for op in self.sent if operation in op]
+        return any(f"name = '{name}'" in query for name in names)
 
     def rows(self, query):
         if "FROM billing_setup" in query:
@@ -231,7 +237,7 @@ class Script:
                         }
                     }
                 ]
-            if not self.lookup_found:
+            if not self.lookup_found or not self.named(query, "campaignOperation"):
                 return []
             return [
                 {
@@ -244,6 +250,8 @@ class Script:
                 }
             ]
         if "FROM shared_set" in query:
+            if not self.named(query, "sharedSetOperation"):
+                return []
             return [{"sharedSet": {"resourceName": f"customers/{CUSTOMER}/sharedSets/902"}}]
         if "FROM customer" in query:
             return [
@@ -277,6 +285,7 @@ class Script:
                 if self.validate_error:
                     raise GoogleAdsCallError(self.validate_error)
                 return {"results": [], "provider_request_id": "req"}
+            self.sent = request["operations"]
             if self.fail_create_once:
                 self.fail_create_once = False
                 raise TimeoutError("response lost")

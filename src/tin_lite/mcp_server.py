@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from mcp.server import MCPServer
 from mcp.server.auth.middleware.auth_context import get_access_token
@@ -252,8 +253,11 @@ async def _review_summary(database: Any, run: Any) -> str | None:
     if not getattr(run, "review_required", False):
         return None
     try:
+        # A review chain shares one decision row keyed by its root run; run_id is the latest.
         row = await database.pool.fetchrow(
-            "SELECT explanation FROM run_decisions WHERE id = $1 AND kind = 'review'", run.id
+            "SELECT explanation FROM run_decisions WHERE run_id = $1 AND kind = 'review' "
+            "ORDER BY created_at DESC, id DESC LIMIT 1",
+            run.id,
         )
     except Exception:  # noqa: BLE001 - a missing decision row is not an error for the caller
         return None
@@ -318,13 +322,20 @@ def _mcp_campaign_revision_view(revision: dict[str, Any]) -> dict[str, Any]:
 
 
 def _project_workflow_message(configured: Any, *, created: bool) -> str:
-    when = _schedule_words(getattr(configured, "schedule", None))
+    schedule = getattr(configured, "schedule", None)
+    when = _schedule_words(schedule)
     next_run_at = getattr(configured, "next_run_at", None)
-    first = (
-        f"; the next run is {next_run_at.isoformat()[:10]}"
-        if next_run_at is not None and hasattr(next_run_at, "isoformat")
-        else ""
-    )
+    first = ""
+    if next_run_at is not None and hasattr(next_run_at, "isoformat"):
+        # next_run_at is UTC; name the date where the weekday and local time apply. A stored
+        # zone that no longer resolves keeps the UTC date rather than failing the reply.
+        data = schedule.model_dump() if hasattr(schedule, "model_dump") else dict(schedule or {})
+        try:
+            if data.get("timezone"):
+                next_run_at = next_run_at.astimezone(ZoneInfo(str(data["timezone"])))
+        except (ZoneInfoNotFoundError, ValueError):
+            pass
+        first = f"; the next run is {next_run_at.date().isoformat()}"
     verb = "is now on your calendar" if created else "is updated"
     name = getattr(configured, "name", None) or getattr(configured, "workflow_key", "The workflow")
     return (

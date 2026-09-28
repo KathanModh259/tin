@@ -315,7 +315,7 @@ def founder_profile(inputs):
     from_priority = {
         "fun": ("min", "none", "patient"),
         "side": ("some", "under_500", "two_months"),
-        "main": ("lots", "500_2000", "weeks"),
+        "main": ("lots", "500_to_2000", "weeks"),
     }
     hours, budget, urgency = from_priority.get(inputs.get("priority") or "", (None, None, None))
     hours = inputs.get("founder_hours") or hours
@@ -325,9 +325,12 @@ def founder_profile(inputs):
     if hours in ("min", "some", "lots"):
         out["hours"] = hours
     if budget:
-        out["budget"] = {"none": "none", "under_500": "small", "500_2000": "real"}.get(
-            budget, "real" if "2000" in budget else None
-        )
+        out["budget"] = {
+            "none": "none",
+            "under_500": "small",
+            "500_to_2000": "real",
+            "more": "real",
+        }.get(budget)
     if urgency:
         out["urgency"] = {"weeks": "12", "two_months": "6", "patient": "0"}.get(urgency)
     return {k: v for k, v in out.items() if v}
@@ -514,6 +517,34 @@ def validate_system(item, avail, inputs):
     return kept, notes
 
 
+def fallback_system(candidates, avail, inputs):
+    """The first candidate system with a workflow code can configure without the model.
+
+    Candidates already exclude hard nos and founder rulings, and a workflow is includable only
+    when the market, the site and HOUSEKEEPING allow it. A runnable workflow comes before one
+    that needs a connection; one already scheduled is never offered again.
+    """
+    for sid in candidates:
+        rows = [
+            w for w in avail[sid]["workflows"] if w["includable"] and not w.get("already_scheduled")
+        ]
+        rows.sort(key=lambda w: w["state"] != "runnable now")
+        for w in rows:
+            modes = w["schedule_modes"]
+            if "weekly" in modes:
+                mode = "weekly"
+            elif "on_demand" in modes:
+                mode = "once"
+            else:
+                continue
+            entry = {"key": w["key"], "mode": mode, "weekdays": ["monday"]}
+            item = {"id": sid, "workflows": [dict(entry, local_time="09:00", inputs=[])]}
+            kept, _notes = validate_system(item, avail, inputs)
+            if kept:  # only workflows whose required inputs code sets itself survive
+                return sid, kept
+    return None, []
+
+
 # ---------------------------------------------------------------- prompts
 
 
@@ -628,14 +659,16 @@ def scope_prompt(context, candidates, weight, budget, hours):
         f"should take on first. Follow these rules from the governing procedure exactly.\n\n{SCOPE_RULES}\n\n"
         "`bottleneck`: two or three sentences naming where growth breaks today and what must be true before more acquisition work "
         "pays off, from the evidence only. `key_unknowns`: up to five facts nobody has established that would change the plan. "
-        "`suggested`: three to five systems (fewer only if fewer can help), chosen by fit x Tin impact AND by whether they act on the "
+        "`suggested`: three to five systems (fewer only if fewer can help, and never none while a candidate has work Tin can run), "
+        "chosen by fit x Tin impact AND by whether they act on the "
         "bottleneck; a high-fit system that cannot move the bottleneck yet is left out with a reason. Never pick two systems whose "
         "roles would be the same work. `items_per_week` is how many things that system gives the founder to review each week; "
         f"the founder has {hours} hours, so the total across suggested systems must not exceed {budget}. `left_out`: up to three "
         "high-ranked systems you did not suggest, each with a one-clause reason.\n"
         "What the founder asked for comes first: a system that delivers a founder request is suggested ahead of a higher-scoring one "
         "that does not. The answers to those requests are written later, once workflows are configured.\n"
-        "Never suggest work the diagnosis says cannot pay off yet, such as auditing a site that is not live.\n"
+        "Never suggest work that needs something the business does not have yet, such as auditing a site that is not live. "
+        "Without a live site, work that produces drafts, research or outreach still pays off: suggest it.\n"
         "`founder_actions` is NOT a list of Tin's roles, scope lines, own workflows or missing pieces, and no entry mentions Tin doing "
         "something. It is up to five things only the founder or their agent can do that decide whether this plan works (record a "
         "number weekly, confirm a fact before it is published, check what an existing paid service delivers, deploy the page), each "
@@ -694,9 +727,10 @@ def system_prompt(context, sid, candidates, suggested, avail, inputs, scope, all
         '`input_schema`: an enum input is exactly one of its listed values, and a string stays within its maxLength and under 600 characters. `weekdays` is empty unless mode is weekly; `local_time` is "HH:MM". Code sets visibility.audit\'s target. '
         "A workflow whose `configured_by` names another system is configured there: include it only if your role needs it, and code "
         "then copies that system's cadence, so your role_line names the work without stating a different cadence for it. Your "
-        "system must keep at least one workflow if any listed workflow serves it. "
-        "Never schedule a workflow that is already scheduled. Include only workflows that serve this system's role; two or three "
-        "is typical. Return an empty workflow list if nothing fits; code then leaves the system out."
+        "system must keep at least one workflow if any listed workflow serves it; without a live site, drafts, research and "
+        "outreach still serve it. Never schedule a workflow that is already scheduled. Include only workflows that serve this "
+        "system's role; two or three is typical. Return an empty workflow list only when no listed workflow serves this system; "
+        "code then leaves the system out."
     )
     load = (
         f"WHERE GROWTH BREAKS (decided): {scope['bottleneck']}\nREVIEW ALLOWANCE: this system may give the founder at most "
@@ -1292,6 +1326,24 @@ async def build_plan(inputs, site, site_text, today, generate):
         notes += [
             f"suggested system {x} had no configurable workflow; removed from scope" for x in lost
         ]
+    fallback = None
+    if not systems:
+        # Every system declined its workflows (seen for founders without a site). A plan with no
+        # system gives setup nothing, so code keeps the top candidate's best workflow and makes it
+        # Tin's suggestion; the rewrite below makes its text promise exactly that setup.
+        sid, kept = fallback_system(candidates, avail, inputs)
+        if sid is not None:
+            systems.append(dict(by_id[sid], id=sid, suggested=True, workflows=kept))
+            touched.add(sid)
+            scope["suggested"] = [
+                {
+                    "id": sid,
+                    "reason": "the highest-ranked system with work Tin can set up now",
+                    "items_per_week": 1,
+                }
+            ]
+            fallback = {"system": sid, "workflows": [w["key"] for w in kept]}
+            notes.append(f"no system kept a workflow; code kept {sid} with {fallback['workflows']}")
     before = {x["id"]: len(by_id[x["id"]]["workflows"]) for x in systems}
     touched |= {x["id"] for x in systems if len(x["workflows"]) != before[x["id"]]}
 
@@ -1343,7 +1395,20 @@ async def build_plan(inputs, site, site_text, today, generate):
     )
     asked_n = len(understanding["founder_requests"])
     if {r["index"] for r in view["requests"]} != set(range(asked_n)):
-        view = await call("view", *view_prompt(context, roles, flags, scope), VIEW_SCHEMA, 16000)
+        missing = sorted(set(range(asked_n)) - {r["index"] for r in view["requests"]})
+        system, user = view_prompt(context, roles, flags, scope)
+        user += (
+            f"\n\nUNANSWERED REQUESTS: the last answer left out these indices of WHAT THE FOUNDER "
+            f"ASKED FOR: {json.dumps(missing)}. Answer every request this time."
+        )
+        # Its own stable step id: reusing "view" would replay the receipted answer. Best-effort and
+        # bought once: an unusable re-ask keeps the valid first view instead of failing the run.
+        try:
+            view = await generate(
+                "view:requests", system, user, VIEW_SCHEMA, 16000, POLICY["reasoning_effort"]
+            )
+        except UnusableModelResult:
+            pass
     unanswered = sorted(set(range(asked_n)) - {r["index"] for r in view["requests"]})
     rules = (
         f"You repair sentences in a founder's growth plan so they follow these rules.\n\n{WRITING}\n\nReturn every slot you were given, "
@@ -1413,6 +1478,7 @@ async def build_plan(inputs, site, site_text, today, generate):
             "rewritten_systems": sorted(touched),
             "retried_steps": retried,
             "code_repairs": notes,
+            "fallback": fallback,
             "lint": {"found": len(problems), "remaining": remaining},
             "site_verdict": site["verdict"],
         },

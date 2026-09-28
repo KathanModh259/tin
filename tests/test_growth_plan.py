@@ -16,7 +16,7 @@ from tin_lite.code_storage import CodeStorage
 from tin_lite.domain import GROWTH_ONBOARDING_PLAN_PATH, GROWTH_ONBOARDING_PLAN_WORKFLOW_NAME
 from tin_lite.growth_onboarding import plan_block, plan_picks, plan_view
 from tin_lite.growth_plan_assets import score as scorer
-from tin_lite.growth_plan_site import evidence_text, read_site
+from tin_lite.growth_plan_site import _get, evidence_text, read_site
 from tin_lite.public_workflows import PUBLIC_WORKFLOWS
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -523,11 +523,129 @@ async def test_no_live_site_excludes_site_bound_workflows():
     }
 
 
+NO_SITE = {"verdict": "none", "pages": [], "seconds": 0}
+
+
+def declines_everything():
+    """What production saw for founders without a site: no suggestion, no workflow anywhere."""
+
+    def no_suggestion(value, user):
+        return {**value, "suggested": []}
+
+    def no_workflows(value, user):
+        return {**value, "role_line": "Tin will wait for a live site.", "workflows": []}
+
+    overrides = {f"system:{sid}": no_workflows for sid in plan.SYSTEM_IDS}
+    return FakeModel(overrides={**overrides, "scope": no_suggestion})
+
+
+async def test_a_plan_without_a_site_is_never_empty_when_every_step_declines():
+    model = declines_everything()
+    result = await plan.build_plan(
+        inputs(product_url=""), NO_SITE, evidence_text(NO_SITE), TODAY, model
+    )
+    text = result["plan"]
+    plan.validate_plan(text, tin_state())
+
+    systems = block_of(text)
+    fallback = result["report"]["fallback"]
+    assert [item["id"] for item in systems] == [fallback["system"]]
+    assert systems[0]["suggested"] and result["report"]["suggested"] == [fallback["system"]]
+    # The kept workflow runs without a site and needs no input the model would have written.
+    avail, _ = plan.availability(tin_state(), False, True)
+    states = {w["key"]: w for w in avail[fallback["system"]]["workflows"]}
+    assert fallback["workflows"] == [w["key"] for w in systems[0]["workflows"]]
+    assert all(states[key]["state"] == "runnable now" for key in fallback["workflows"])
+    # The checklist offers it as Tin's suggestion, and its text is rewritten to match the setup.
+    _picked, offered = plan_picks(text)
+    assert offered == [fallback["system"]] and "(Tin's suggestion)" in text
+    assert f"rewrite:{fallback['system']}" in model.calls
+    assert plan_view(text)
+    # A plan whose systems kept their workflows reports no fallback.
+    ordinary = await plan.build_plan(inputs(), SITE, SITE_TEXT, TODAY, FakeModel())
+    assert ordinary["report"]["fallback"] is None
+
+
+def test_the_fallback_respects_hard_nos_and_founder_rulings():
+    state = tin_state()
+    for w in state["workflows"]:
+        if w["key"] in ("research.deep_dive", "outreach.email_shortlist"):
+            w["required_inputs"] = []
+    state["integrations"][1]["connected"] = True  # the mailbox is there; only the hard no stops it
+    ranking = plan.score({}, {})[1]["ranking"]
+
+    # Without the hard no the mailbox shortlist comes first in its system.
+    open_avail, _ = plan.availability(state, False, False)
+    sid, kept = plan.fallback_system(["founder-led-sales"], open_avail, inputs())
+    assert sid == "founder-led-sales"
+    assert kept == [
+        {
+            "key": "outreach.email_shortlist",
+            "mode": "weekly",
+            "weekdays": ["monday"],
+            "local_time": "09:00",
+            "inputs": {},
+        }
+    ]
+
+    avail, _ = plan.availability(state, False, False, ["no_cold_email"])
+    _fit, candidates, banned, _weight = plan.order(
+        ranking, avail, ["no_cold_email"], ["founder-led-sales"]
+    )
+    assert "cold-outbound" in banned and "cold-outbound" not in candidates
+    assert "founder-led-sales" not in candidates
+    sid, kept = plan.fallback_system(candidates, avail, inputs())
+    assert sid in candidates and kept
+    assert not any(w["key"].startswith("outreach.") for w in kept)
+    # Within an allowed system the hard no still removes the forbidden workflow.
+    assert plan.fallback_system(["founder-led-sales"], avail, inputs())[1][0]["key"] == (
+        "research.deep_dive"
+    )
+    # Nothing code can configure alone means no fallback, not an invented input.
+    plain, _ = plan.availability(tin_state(), False, False)
+    assert plan.fallback_system(["cold-outbound"], plain, inputs()) == (None, [])
+
+
 async def test_an_unusable_result_gets_one_replacement_under_its_own_step():
     model = FakeModel(unusable=["scope"])
     result = await plan.build_plan(inputs(), SITE, SITE_TEXT, TODAY, model)
     assert "scope" in model.calls and "scope:retry" in model.calls
     assert result["report"]["retried_steps"] == ["scope: response was truncated"]
+
+
+async def test_a_view_that_skips_a_request_is_asked_again_under_its_own_step():
+    model = FakeModel(overrides={"view": lambda value, user: dict(value, requests=[])})
+    receipts = {}
+
+    async def receipted(step, *args):
+        # The activity replays a completed step's receipt instead of buying it again.
+        if step not in receipts:
+            receipts[step] = await model(step, *args)
+        return receipts[step]
+
+    result = await plan.build_plan(inputs(), SITE, SITE_TEXT, TODAY, receipted)
+    assert model.calls.count("view") == 1 and "view:requests" in model.calls
+    assert result["report"]["unanswered_requests"] == []
+    assert "Delivered by Organic search content" in result["plan"]
+
+
+async def test_an_unusable_request_re_ask_keeps_the_original_view():
+    model = FakeModel(
+        overrides={"view": lambda value, user: dict(value, requests=[])},
+        unusable=["view:requests", "view:requests:retry"],
+    )
+    asked = {}
+
+    async def recording(step, system, user, *args):
+        asked[step] = user
+        return await model(step, system, user, *args)
+
+    result = await plan.build_plan(inputs(), SITE, SITE_TEXT, TODAY, recording)
+    # The re-ask is best-effort: one extra request at most, and the valid first view stands.
+    assert model.calls.count("view:requests") == 1 and "view:requests:retry" not in model.calls
+    assert "UNANSWERED REQUESTS" in asked["view:requests"] and "[0]" in asked["view:requests"]
+    assert result["report"]["unanswered_requests"] == [0]
+    assert result["report"]["retried_steps"] == []
 
 
 async def test_two_unusable_results_fail_the_run_and_save_nothing():
@@ -691,6 +809,20 @@ def test_scorer_ranks_all_systems_and_penalises_fair_failures():
     assert "priceBand" not in profile
 
 
+def test_every_form_budget_reaches_the_scorer():
+    # Each budget the onboarding form offers maps to a rubric value; "unknown" stays unset.
+    expected = {
+        "none": "none",
+        "under_500": "small",
+        "500_to_2000": "real",
+        "more": "real",
+        "unknown": None,
+    }
+    for budget, value in expected.items():
+        assert plan.founder_profile({"budget": budget}).get("budget") == value, budget
+    assert plan.founder_profile({"priority": "main"})["budget"] == "real"
+
+
 def resolver_for(table):
     async def resolve(host, port, **_kwargs):
         return [(None, None, None, None, (table[host], port))]
@@ -732,6 +864,32 @@ async def test_site_reader_refuses_non_public_addresses_and_outside_redirects():
             ),
         )
         assert outside["pages"][0]["error"] == "outside_site_redirect"
+
+
+@pytest.mark.parametrize(
+    "addresses",
+    [
+        ["93.184.216.34", "2606:4700:4700::1111"],
+        ["2606:4700:4700::1111", "93.184.216.34"],
+    ],
+)
+async def test_site_reader_keeps_resolver_preference_and_checks_every_address(addresses):
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.host)
+        return httpx.Response(404, text="not found", headers={"content-type": "text/html"})
+
+    async def resolve(host, port, **_kwargs):
+        return [(None, None, None, None, (ip, port)) for ip in addresses]
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await read_site("https://acme.example", client=client, resolver=resolve)
+        assert seen and set(seen) == {addresses[0]}
+
+        addresses.append("127.0.0.1")
+        private = await read_site("https://acme.example", client=client, resolver=resolve)
+    assert private["pages"][0]["error"] == "non_public_address"
 
 
 async def test_site_reader_reads_pages_the_sitemap_and_reports_a_js_shell():
@@ -776,6 +934,35 @@ async def test_site_reader_reads_pages_the_sitemap_and_reports_a_js_shell():
     assert evidence_text({"verdict": "none", "pages": []}).startswith("No product_url")
 
 
+async def test_site_reader_keeps_nul_bytes_and_error_bodies_out_of_the_receipt():
+    # A live site served a binary 404 for /llms.txt; its NUL bytes made Postgres refuse the receipt.
+    def handler(request):
+        if request.url.path == "/llms.txt":
+            return httpx.Response(
+                404, content=b"\x00\x01PK\x00binary", headers={"content-type": "text/plain"}
+            )
+        if request.url.path == "/docs.txt":
+            return httpx.Response(
+                200, content=b"<html>app shell</html>", headers={"content-type": "text/html"}
+            )
+        return httpx.Response(
+            200,
+            content=b"<html><title>Loc\x00In</title><p>" + b"Local SEO. " * 200 + b"</p></html>",
+            headers={"content-type": "text/html"},
+        )
+
+    resolve = resolver_for({"locin.example": "93.184.216.34"})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        site = await read_site("https://locin.example", client=client, resolver=resolve)
+        shell = await _get(client, "https://locin.example/docs.txt", resolve)
+
+    assert "\x00" not in json.dumps(site)
+    assert site["pages"][0]["title"] == "LocIn"
+    llms = next(p for p in site["pages"] if p["kind"] == "llms")
+    assert llms["status"] == 404 and llms["text"] == ""
+    assert shell["status"] == 200 and shell["text"] == ""
+
+
 # ---------------------------------------------------------------- activities (database-backed)
 
 
@@ -784,7 +971,7 @@ def step_of(schema_name):
     name = schema_name.removeprefix("growth_plan_")
     retry = name.endswith("_retry")
     name = name.removesuffix("_retry")
-    for prefix in ("system", "rewrite", "repair"):
+    for prefix in ("system", "rewrite", "repair", "view"):
         if name.startswith(prefix + "_"):
             name = f"{prefix}:{name[len(prefix) + 1 :]}"
     return name + (":retry" if retry else "")
@@ -1018,3 +1205,128 @@ async def test_storage_stages_the_plan_file_and_nothing_else_for_this_executor()
         with pytest.raises(ValueError, match="invalid native output checkpoint"):
             await storage.stage_native_output(**{**args, **bad})
     assert len(calls) == 1
+
+
+class ReceiptsOnly:
+    """Just enough of the database for the write and failure activities, without Postgres."""
+
+    def __init__(self, run):
+        from contextlib import asynccontextmanager
+
+        from tin_lite.domain import EffectReceipt
+
+        self.run, self.receipts, self.failures = run, {}, []
+        self.Receipt = EffectReceipt
+
+        @asynccontextmanager
+        async def effect_lock(key, operation):
+            yield None, self.receipts.get(key)
+
+        self.effect_lock = effect_lock
+
+    async def get_run(self, run_id, conn=None):
+        return self.run
+
+    async def get_effect(self, key):
+        return self.receipts.get(key)
+
+    async def project_run_progress(self, **_kwargs):
+        return None
+
+    async def start_effect(self, conn, *, execution_key, operation):
+        self.receipts.setdefault(
+            execution_key, self.Receipt(execution_key, operation, "started", None)
+        )
+
+    async def fail_effect(self, conn, *, execution_key, error_message):
+        old = self.receipts[execution_key]
+        self.receipts[execution_key] = self.Receipt(
+            execution_key, old.operation, "failed", None, error_message
+        )
+
+    async def complete_effect(self, conn, *, execution_key, result):
+        self.receipts[execution_key] = self.Receipt(execution_key, plan.KEY, "completed", result)
+
+    async def project_failure(self, *, run_id, error_message):
+        self.failures.append(error_message)
+
+
+def receipts_fixture(monkeypatch, model):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from tin_lite.domain import EffectReceipt
+    from tin_lite.growth_plan_activities import GrowthPlanActivities
+
+    run = SimpleNamespace(
+        id=uuid4(),
+        executor=plan.KEY,
+        status=SimpleNamespace(value="running"),
+        input={k: v for k, v in inputs(product_url="").items() if k != "tin_state"},
+    )
+    db = ReceiptsOnly(run)
+    context = {"tin_state": tin_state(), "site": NO_SITE, "memory": "", "today": TODAY}
+    db.receipts[f"{run.id}:plan_context"] = EffectReceipt(
+        f"{run.id}:plan_context", plan.KEY, "completed", context
+    )
+    activities = GrowthPlanActivities(database=db, storage=None, settings=None, router=None)
+
+    async def generate(self, run, step, system, user, schema, max_out, effort):
+        return await model(step, system, user, schema, max_out, effort)
+
+    monkeypatch.setattr(GrowthPlanActivities, "_generate", generate)
+    monkeypatch.setattr("tin_lite.growth_plan_activities.activity.heartbeat", lambda *_a: None)
+    return db, activities, run
+
+
+async def test_a_site_less_write_saves_a_plan_when_every_step_declines(monkeypatch):
+    db, activities, run = receipts_fixture(monkeypatch, declines_everything())
+    await activities.write(str(run.id))
+    document = db.receipts[f"{run.id}:plan_document"].result
+    plan.validate_plan(document["text"], tin_state())
+    assert document["report"]["fallback"]["system"] in plan.SYSTEM_IDS
+    assert f"{run.id}:plan_write_failed" not in db.receipts
+
+
+async def test_a_refused_plan_says_why_and_never_points_to_files(monkeypatch):
+    from temporalio.exceptions import ApplicationError
+
+    # Nothing in this project is configurable without the model, so even the fallback is empty.
+    db, activities, run = receipts_fixture(monkeypatch, declines_everything())
+    for w in db.receipts[f"{run.id}:plan_context"].result["tin_state"]["workflows"]:
+        if w["key"] == "content.answer_page":
+            w["required_inputs"] = ["question"]
+    with pytest.raises(ApplicationError, match="final check: the plan offers no system") as exc:
+        await activities.write(str(run.id))
+    assert "unusable" not in str(exc.value)
+    assert f"{run.id}:plan_document" not in db.receipts
+
+    await activities.failure(str(run.id))
+    assert db.failures == [str(exc.value)]
+    assert "Nothing was saved" in db.failures[0] and "Check Files" not in db.failures[0]
+
+
+async def test_unusable_model_results_keep_their_own_message(monkeypatch):
+    from temporalio.exceptions import ApplicationError
+
+    model = FakeModel(unusable=["scope", "scope:retry"])
+    db, activities, run = receipts_fixture(monkeypatch, model)
+    with pytest.raises(ApplicationError, match="model results were unusable"):
+        await activities.write(str(run.id))
+    await activities.failure(str(run.id))
+    assert db.failures == ["The plan's model results were unusable. Nothing was saved; try again."]
+
+
+async def test_failure_before_anything_was_written_does_not_send_the_founder_to_files(
+    monkeypatch,
+):
+    from tin_lite.domain import EffectReceipt
+
+    db, activities, run = receipts_fixture(monkeypatch, FakeModel())
+    await activities.failure(str(run.id))
+    assert db.failures[-1] == "The growth plan could not be written. Nothing was saved; try again."
+    # Once the save step has started, a file may exist: the founder is told to check Files.
+    key = f"{run.id}:plan_artifact_persist"
+    db.receipts[key] = EffectReceipt(key, plan.KEY, "started", None)
+    await activities.failure(str(run.id))
+    assert "Check Files for a saved result" in db.failures[-1]

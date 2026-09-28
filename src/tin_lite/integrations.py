@@ -123,6 +123,7 @@ WORKSPACE_DEFAULT_CAPABILITIES = (
     "gmail.messages.send",
     "calendar.events.read",
 )
+GITHUB_REPOSITORY_PAGE_LIMIT = 10
 GITHUB_OPEN_PULL_REQUEST_LIMIT = 20
 GITHUB_OPEN_PULL_REQUEST_FILE_LIMIT = 100
 GITHUB_OPEN_PULL_REQUEST_EVIDENCE_MAX_BYTES = 250_000
@@ -1073,6 +1074,7 @@ class IntegrationService:
             raise IntegrationAuthorizationError(
                 "The GitHub installation must grant Contents and Pull requests write access"
             )
+        github_user = await self._github_authorizing_user(user_token)
         del user_token
         connection = await self._database.upsert_integration_connection(
             project_id=attempt.project_id,
@@ -1100,7 +1102,40 @@ class IntegrationService:
             "GitHub connected with repository and pull-request write access.",
             suffix=str(uuid4()),
         )
+        if github_user is not None:
+            await self._database.link_github_identity(
+                clerk_user_id=clerk_user_id,
+                github_user_id=github_user[0],
+                github_login=github_user[1],
+            )
         return connection
+
+    async def _github_authorizing_user(self, user_token: str) -> tuple[int, str] | None:
+        """The GitHub account that authorized, kept so contributor checks can match PR authors.
+
+        The connection does not depend on it: a failed lookup only leaves the identity unlinked.
+        """
+        try:
+            response = await self._client.get(
+                "https://api.github.com/user", headers=self._github_headers(user_token)
+            )
+            payload = response.json() if response.status_code == 200 else None
+        except (httpx.HTTPError, ValueError):
+            logger.warning("GitHub user lookup failed; contributor identity not linked")
+            return None
+        if not isinstance(payload, dict):
+            logger.warning("GitHub user lookup returned HTTP %s", response.status_code)
+            return None
+        user_id, login = payload.get("id"), payload.get("login")
+        if (
+            not isinstance(user_id, int)
+            or isinstance(user_id, bool)
+            or user_id <= 0
+            or not isinstance(login, str)
+            or not 1 <= len(login) <= 39
+        ):
+            return None
+        return user_id, login
 
     async def google_sites(self, *, project_id: UUID) -> list[ProviderOption]:
         connection = await self._connection(project_id, GSC_PROVIDER)
@@ -1155,22 +1190,31 @@ class IntegrationService:
         token = await self._github_installation_token(installation_id)
         execution_key = f"integration:{uuid4()}"
         fingerprint = _sha256(f"{project_id}:{GITHUB_PROVIDER}:repositories.list")
+        options: list[ProviderOption] = []
+        truncated = False
         try:
-            response = await self._client.get(
-                "https://api.github.com/installation/repositories?per_page=100",
-                headers=self._github_headers(token),
-            )
-            payload = _provider_json(response, provider="GitHub")
-            repositories = payload.get("repositories", [])
-            options = [
-                ProviderOption(
-                    id=str(item["full_name"]),
-                    label=str(item["full_name"]),
-                    detail=("private" if item.get("private") else "public"),
+            # GitHub pages installation repositories at 100; follow a bounded number of pages.
+            for page in range(1, GITHUB_REPOSITORY_PAGE_LIMIT + 1):
+                response = await self._client.get(
+                    "https://api.github.com/installation/repositories",
+                    headers=self._github_headers(token),
+                    params={"per_page": 100, "page": page},
                 )
-                for item in repositories
-                if isinstance(item, dict) and item.get("full_name")
-            ]
+                payload = _provider_json(response, provider="GitHub")
+                repositories = payload.get("repositories", [])
+                options.extend(
+                    ProviderOption(
+                        id=str(item["full_name"]),
+                        label=str(item["full_name"]),
+                        detail=("private" if item.get("private") else "public"),
+                    )
+                    for item in repositories
+                    if isinstance(item, dict) and item.get("full_name")
+                )
+                if not _github_has_next_page(response):
+                    break
+            else:
+                truncated = True
             options.sort(key=lambda option: option.label.casefold())
         except IntegrationError:
             await self._database.record_integration_call(
@@ -1192,7 +1236,7 @@ class IntegrationService:
             capability="repositories.list",
             request_fingerprint=fingerprint,
             status="completed",
-            response_summary={"count": len(options)},
+            response_summary={"count": len(options), "truncated": truncated},
             provider_request_id=response.headers.get("x-github-request-id"),
         )
         return options
@@ -2765,6 +2809,7 @@ class IntegrationService:
                     message=message.strip(),
                     files=files,
                     base_branch=base_branch,
+                    expected_binding=expected_binding,
                 )
             except IntegrationError:
                 await record("failed", error_code="provider_request_failed")
@@ -2856,6 +2901,7 @@ class IntegrationService:
         message: str,
         files: tuple[GitHubFileChange, ...],
         base_branch: str | None,
+        expected_binding: GitHubRepositoryBinding | None = None,
     ) -> tuple[GitHubCommitResult, str | None]:
         token = await self._github_installation_token(_installation_id(connection))
         headers = self._github_headers(token)
@@ -2863,6 +2909,25 @@ class IntegrationService:
         branch = await self._github_default_branch(
             headers=headers, repository_path=repository_path, base_branch=base_branch
         )
+        if expected_binding is not None:
+            # Writes use the live file's sha, so a destination changed after preparation
+            # would be overwritten silently. Unrelated default-branch commits remain fine.
+            ref_response = await self._client.get(
+                f"https://api.github.com/repos/{repository_path}/git/ref/heads/"
+                f"{quote(branch, safe='')}",
+                headers=headers,
+            )
+            target = _provider_json(ref_response, provider="GitHub").get("object")
+            head_sha = target.get("sha") if isinstance(target, dict) else None
+            if not isinstance(head_sha, str) or not head_sha:
+                raise IntegrationUpstreamError("GitHub default branch did not resolve to a commit")
+            if head_sha != expected_binding.head_sha:
+                await self._github_validate_base_advance(
+                    connection=connection,
+                    binding=expected_binding,
+                    current_sha=head_sha,
+                    files=files,
+                )
         result = None
         request_id = None
         for change in files:
@@ -3498,14 +3563,16 @@ class IntegrationService:
         existing = await self._database.get_integration_connection(
             project_id=project_id, provider_key=ADS_PROVIDER
         )
-        if (
-            existing is not None
-            and existing.external_account_id not in {None, account}
-            and existing.configuration.get("link_status") == "active"
-        ):
-            raise IntegrationAuthorizationError(
-                "Disconnect the linked Google Ads account before connecting another one"
-            )
+        if existing is not None and existing.external_account_id not in {None, account}:
+            if existing.configuration.get("link_status") == "pending":
+                # The old invitation may have been accepted since Tin last checked it.
+                existing = await self.google_ads_link_status(project_id=project_id)
+            if existing.configuration.get("link_status") == "active":
+                raise IntegrationAuthorizationError(
+                    "Disconnect the linked Google Ads account before connecting another one"
+                )
+            # The overwrite below forgets the old account, so withdraw its invitation first.
+            await self._cancel_google_ads_link(existing)
         configuration = {
             **(dict(existing.configuration) if existing is not None else {}),
             "customer_id": account,
