@@ -16,6 +16,7 @@ from tin_lite.activities import TinActivities
 from tin_lite.article_review import validate_article, validate_changes
 from tin_lite.catalog import BUILTIN_WORKFLOWS
 from tin_lite.content_draft_sources import ContentDraftSources
+from tin_lite.mcp_server import _review_summary
 from tin_lite.organic_audit import canonical_json
 from tin_lite.workflow_review_dispatch import dispatch_reviews
 from tin_lite.workflow_review_store import ReviewConflict
@@ -143,6 +144,19 @@ async def test_two_revisions_one_decision_and_only_latest_approval(
     if planned:
         sources = ContentDraftSources(database=f.db, storage=f.storage)
         assert (await sources.saved(first.id))["item"] == (await sources.saved(third.id))["item"]
+
+
+async def test_revised_draft_gets_its_own_review_summary(publication_db, monkeypatch):
+    f = await setup(publication_db, monkeypatch)
+    first = await save(f, await start(f))
+    assert await _review_summary(f.db, first) == "Answer page draft is ready for your review."
+    second = await save(f, await revise(f, first))
+    await f.db.pool.execute(
+        "UPDATE run_decisions SET explanation='The revised draft.' WHERE run_id=$1", second.id
+    )
+    # One decision row per review chain: its id is the root run, its run_id the latest.
+    assert await _review_summary(f.db, second) == "The revised draft."
+    assert await _review_summary(f.db, first) is None
 
 
 async def test_duplicate_and_approval_race_is_one_transaction(publication_db, monkeypatch):
@@ -371,6 +385,31 @@ async def test_failed_revision_retry_retains_copy_and_can_stop_chain(publication
     await dispatch_reviews(f.runtime, f.settings)
     handle.cancel.assert_awaited_once()
     assert (await f.db.get_run(source.id)).status.value == "superseded"
+
+
+@pytest.mark.parametrize("ended", ["failed", "stopped"])
+async def test_failed_or_stopped_revision_keeps_reviewed_draft_in_program_progress(
+    publication_db, monkeypatch, ended
+):
+    from tin_lite.workflow_inputs import WorkflowInputError
+
+    f = await setup(publication_db, monkeypatch, planned=True)
+    source = await save(f, await start(f))
+    revision = await revise(f, source)
+    await f.db.pool.execute("UPDATE workflow_runs SET status='failed' WHERE id=$1", revision.id)
+    if ended == "stopped":
+        view = await f.reviews.view(revision.id, ACTOR)
+        await f.reviews.cancel_failed_revision(
+            run_id=revision.id, actor=ACTOR, token=view["review_token"]
+        )
+    assert (await f.db.get_run(revision.id)).status.value == ended
+    choices = await f.service.discover(project_id=f.project.id, program_id=f.configured.id)
+    item = next(i for i in choices["items"] if i["id"] == f.inputs["item_id"])
+    assert item["draft"]["run_id"] == str(source.id) and item["draft"]["has_output"]
+    assert not item["available"] and choices["next"]["item_id"] != item["id"]
+    # Drafting this item again still needs the explicit rewrite; no new article is bought.
+    with pytest.raises(WorkflowInputError, match="already has a draft"):
+        await start(f)
 
 
 async def test_dispatch_lost_ack_retries_only_command(publication_db, monkeypatch):
