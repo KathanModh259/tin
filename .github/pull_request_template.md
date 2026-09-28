@@ -40,3 +40,15 @@ Maintainer invited to the project: <!-- yes / no -->
 
 <!-- What the private run produced, what was wrong with it and what you changed. Include
      fixture tests, cost of the run, and model limits. -->
+
+### Example output
+
+<!-- The output of the run cited above, pasted as the run produced it: the report or files
+     it wrote, not a summary or a different run. Keep it inside the collapsed block. -->
+
+<details>
+<summary>Output of the cited run</summary>
+
+<!-- paste here -->
+
+</details>
