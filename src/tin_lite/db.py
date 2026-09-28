@@ -564,6 +564,56 @@ class Database:
         )
         return _integration_connection(row) if row else None
 
+    async def link_github_identity(
+        self, *, clerk_user_id: str, github_user_id: int, github_login: str
+    ) -> None:
+        """Bind a GitHub account to one Tin user; the latest authorization wins."""
+        async with self.pool.acquire() as conn, conn.transaction():
+            await conn.execute(
+                """
+                DELETE FROM tin_user_github_identities
+                WHERE github_user_id = $1 AND clerk_user_id <> $2
+                """,
+                github_user_id,
+                clerk_user_id,
+            )
+            await conn.execute(
+                """
+                INSERT INTO tin_user_github_identities (clerk_user_id, github_user_id, github_login)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (clerk_user_id) DO UPDATE
+                SET github_user_id = EXCLUDED.github_user_id,
+                    github_login = EXCLUDED.github_login,
+                    updated_at = now()
+                """,
+                clerk_user_id,
+                github_user_id,
+                github_login,
+            )
+
+    async def clerk_user_for_github_id(self, github_user_id: int) -> str | None:
+        return await self.pool.fetchval(
+            "SELECT clerk_user_id FROM tin_user_github_identities WHERE github_user_id = $1",
+            github_user_id,
+        )
+
+    async def project_setup_completed(self, project_id: UUID) -> bool:
+        """True once any Start here run in the project has its setup receipt completed."""
+        return bool(
+            await self.pool.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM workflow_runs AS run
+                    JOIN effect_receipts AS receipt
+                      ON receipt.execution_key = 'onboarding:' || run.id::text || ':setup'
+                    WHERE run.project_id = $1 AND run.executor = 'growth.onboarding'
+                      AND receipt.status = 'completed'
+                )
+                """,
+                project_id,
+            )
+        )
+
     async def list_integration_connections_by_external_id(
         self, *, provider_key: str, external_account_id: str
     ) -> list[IntegrationConnection]:
@@ -1346,11 +1396,20 @@ class Database:
                 raise LookupError("invitation not found")
             if row["email"] != expected_email:
                 raise RuntimeError("invitation identity changed")
-            if row["expires_at"] <= datetime.now(UTC):
-                raise RuntimeError("invitation has expired")
             accepted_by = row["accepted_by_clerk_user_id"]
             if accepted_by is not None and accepted_by != clerk_user_id:
                 raise RuntimeError("invitation has already been accepted")
+            # Its member may replay an accepted invitation after expiry; it grants nothing new.
+            if row["expires_at"] <= datetime.now(UTC) and (
+                accepted_by is None
+                or not await conn.fetchval(
+                    "SELECT EXISTS (SELECT 1 FROM project_memberships "
+                    "WHERE project_id = $1 AND clerk_user_id = $2)",
+                    row["project_id"],
+                    clerk_user_id,
+                )
+            ):
+                raise RuntimeError("invitation has expired")
             await conn.execute(
                 """
                 INSERT INTO project_memberships (project_id, clerk_user_id)
@@ -1785,6 +1844,11 @@ class Database:
     ) -> ProjectWorkflow:
         project_workflow_id = uuid4()
         async with self.pool.acquire() as conn, conn.transaction():
+            if not await conn.fetchval(
+                "SELECT true FROM projects WHERE id = $1 AND deleted_at IS NULL FOR SHARE",
+                project_id,
+            ):
+                raise LookupError(f"project {project_id} does not exist")
             workflow = await conn.fetchrow(
                 """
                 SELECT * FROM workflows
@@ -1936,6 +2000,9 @@ class Database:
                 """
                 UPDATE project_workflows
                 SET name = $3, inputs = $4::jsonb, schedule = $5::jsonb,
+                    -- A skip names one occurrence of the old calendar; a new one disarms it.
+                    skip_scheduled_for = CASE WHEN schedule IS DISTINCT FROM $5::jsonb
+                        THEN NULL ELSE skip_scheduled_for END,
                     status = 'provisioning', last_error = NULL,
                     settings_revision = settings_revision + 1, updated_at = now()
                 WHERE id = $1 AND project_id = $2 AND status <> 'archived'
@@ -2239,8 +2306,10 @@ class Database:
                     "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
                     f"content-program:{UUID(input_payload['program_id'])}",
                 )
+            # Deletion tombstones under the same row lock, so admission never outlives it.
             exists = await conn.fetchval(
-                "SELECT true FROM projects WHERE id = $1 FOR UPDATE", project_id
+                "SELECT true FROM projects WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+                project_id,
             )
             if not exists:
                 raise LookupError(f"project {project_id} does not exist")
@@ -4188,17 +4257,23 @@ class Database:
             )
             timezone = ZoneInfo(row["send_timezone"])
             local_now = current.astimezone(timezone)
-            window_start = datetime.combine(local_now.date(), row["send_window_start"], timezone)
-            window_end = datetime.combine(local_now.date(), row["send_window_end"], timezone)
-            if local_now < window_start:
-                return await defer(max(1, math.ceil((window_start - local_now).total_seconds())))
-            if local_now >= window_end:
+            # Compare and subtract UTC instants: same-zone arithmetic is wall-clock, which gains
+            # an hour across spring-forward and is ambiguous in the repeated fall-back hour.
+            window_start = datetime.combine(
+                local_now.date(), row["send_window_start"], timezone
+            ).astimezone(UTC)
+            window_end = datetime.combine(
+                local_now.date(), row["send_window_end"], timezone
+            ).astimezone(UTC)
+            if current < window_start:
+                return await defer(max(1, math.ceil((window_start - current).total_seconds())))
+            if current >= window_end:
                 next_start = datetime.combine(
                     local_now.date() + timedelta(days=1),
                     row["send_window_start"],
                     timezone,
                 )
-                return await defer(max(1, math.ceil((next_start - local_now).total_seconds())))
+                return await defer(max(1, math.ceil((next_start - current).total_seconds())))
             day_start = datetime.combine(local_now.date(), time.min, timezone).astimezone(UTC)
             day_end = datetime.combine(
                 local_now.date() + timedelta(days=1), time.min, timezone
@@ -4224,7 +4299,7 @@ class Database:
                     row["send_window_start"],
                     timezone,
                 )
-                return await defer(max(1, math.ceil((next_start - local_now).total_seconds())))
+                return await defer(max(1, math.ceil((next_start - current).total_seconds())))
             last_started_at = await conn.fetchval(
                 """
                 SELECT max(delivery.started_at)
@@ -5991,6 +6066,33 @@ class Database:
             for row in rows
         ]
 
+    async def runs_stopped_by_deletion(
+        self, conn: asyncpg.Connection, *, project_id: UUID
+    ) -> list[StoppedRunHandle]:
+        """The runs a deletion stopped, on this attempt or an earlier one.
+
+        The stop commits before the external cleanup, so a retry finds these runs already
+        stopped; closing them again is safe and finishes what a failed attempt left open.
+        """
+        rows = await conn.fetch(
+            """
+            SELECT run.id, run.temporal_workflow_id, run.sandbox_id
+            FROM workflow_runs run JOIN projects project ON project.id = run.project_id
+            WHERE run.project_id = $1 AND run.status = 'stopped'
+              AND run.finished_at >= project.deleted_at
+            ORDER BY run.created_at, run.id
+            """,
+            project_id,
+        )
+        return [
+            StoppedRunHandle(
+                run_id=row["id"],
+                temporal_workflow_id=row["temporal_workflow_id"],
+                sandbox_id=row["sandbox_id"],
+            )
+            for row in rows
+        ]
+
     async def archive_project_workflows_for_deletion(
         self, conn: asyncpg.Connection, *, project_id: UUID
     ) -> list[UUID]:
@@ -6642,7 +6744,7 @@ class Database:
                 heartbeat_at = now()
             WHERE id = $1
               AND (NOT review_required OR review_decision = 'approved')
-              AND status <> 'superseded'
+              AND status NOT IN ('failed', 'stopped', 'superseded')
             RETURNING id
             """,
             run_id,
@@ -6651,6 +6753,11 @@ class Database:
             artifact_path,
         )
         if projected is None:
+            status = await self.pool.fetchval(
+                "SELECT status FROM workflow_runs WHERE id = $1", run_id
+            )
+            if status in {"failed", "stopped", "superseded"}:
+                raise SideEffectConflictError("run cannot complete in its current state")
             raise RuntimeError("run cannot complete before required human review")
         await self._track_run(run_id, "run_succeeded", artifact_path=artifact_path)
 

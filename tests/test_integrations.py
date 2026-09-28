@@ -67,6 +67,7 @@ class FakeIntegrationDatabase:
         self.calls: list[dict] = []
         self.call_receipts: dict[str, IntegrationCallReceipt] = {}
         self.deliveries: set[tuple[str, str]] = set()
+        self.github_identities: dict[str, tuple[int, str]] = {}
 
     async def create_integration_auth_attempt(self, **values) -> None:
         self.attempts[values["token_hash"]] = IntegrationAuthAttempt(
@@ -123,6 +124,9 @@ class FakeIntegrationDatabase:
             **{**attempt.__dict__, "used_at": datetime.now(UTC)}
         )
         return attempt
+
+    async def link_github_identity(self, *, clerk_user_id, github_user_id, github_login) -> None:
+        self.github_identities[clerk_user_id] = (github_user_id, github_login)
 
     async def upsert_integration_connection(self, **values) -> IntegrationConnection:
         now = datetime.now(UTC)
@@ -1106,6 +1110,8 @@ async def test_github_installation_requires_explicit_contents_and_pr_write(tmp_p
     async def github(request: httpx.Request) -> httpx.Response:
         if request.method == "POST" and request.url.path == "/login/oauth/access_token":
             return httpx.Response(200, json={"access_token": "user-token"})
+        if request.method == "GET" and request.url.path == "/user":
+            return httpx.Response(200, json={"id": 4242, "login": "ada"})
         if request.method == "GET" and request.url.path.endswith("/repositories"):
             assert request.headers["authorization"] == "Bearer user-token"
             return httpx.Response(200, json={"total_count": 1, "repositories": []})
@@ -1197,6 +1203,8 @@ async def test_github_rejects_an_installation_the_authorizing_user_cannot_access
     async def github(request: httpx.Request) -> httpx.Response:
         if request.method == "POST" and request.url.path == "/login/oauth/access_token":
             return httpx.Response(200, json={"access_token": "user-token"})
+        if request.method == "GET" and request.url.path == "/user":
+            return httpx.Response(200, json={"id": 4242, "login": "ada"})
         if request.method == "GET" and request.url.path.endswith("/repositories"):
             return httpx.Response(404, json={"message": "Not Found"})
         raise AssertionError("unverified installation reached a privileged GitHub endpoint")
@@ -2153,6 +2161,8 @@ def _github_write_app(private_key_path, *, user_installations=None):
         calls.append(f"{request.method} {request.url.path}")
         if request.method == "POST" and request.url.path == "/login/oauth/access_token":
             return httpx.Response(200, json={"access_token": "user-token"})
+        if request.method == "GET" and request.url.path == "/user":
+            return httpx.Response(200, json={"id": 4242, "login": "ada"})
         if request.method == "GET" and request.url.path == "/user/installations":
             assert request.headers["authorization"] == "Bearer user-token"
             return httpx.Response(200, json={"installations": user_installations or []})
@@ -2193,6 +2203,44 @@ def _github_settings(tmp_path):
         github_app_private_key_path=private_key_path,
         github_webhook_secret=SecretStr("webhook-secret"),
     ), private_key_path
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user_response",
+    [httpx.Response(500, json={}), httpx.Response(200, json={"id": "not-a-number"})],
+)
+async def test_github_connects_even_when_the_authorizing_user_cannot_be_read(
+    tmp_path, user_response
+) -> None:
+    configured, private_key_path = _github_settings(tmp_path)
+    database = FakeIntegrationDatabase()
+    github, _ = _github_write_app(private_key_path)
+
+    async def without_user(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/user":
+            return user_response
+        return await github(request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(without_user)) as client:
+        service = IntegrationService(
+            database=database,  # type: ignore[arg-type]
+            settings=configured,  # type: ignore[arg-type]
+            client=client,
+        )
+        started = await service.start_connect(
+            project_id=PROJECT_ID, provider_key=GITHUB_PROVIDER, clerk_user_id=USER_ID
+        )
+        state = parse_qs(urlsplit(started.authorization_url).query)["state"][0]
+        connection = await service.complete_github(
+            state=state,
+            code="one-time-code",
+            installation_id=42,
+            setup_action="install",
+            clerk_user_id=USER_ID,
+        )
+    assert connection.status == "connected"
+    assert database.github_identities == {}
 
 
 @pytest.mark.asyncio
@@ -2249,6 +2297,7 @@ async def test_github_already_installed_path_authorizes_then_binds_the_remembere
     assert connection.configuration["write_opted_in"] is True
     assert "GET /user/installations/42/repositories" in calls
     assert "GET /user/installations" not in calls
+    assert database.github_identities == {USER_ID: (4242, "ada")}
     with pytest.raises(IntegrationAuthorizationError, match="expired"):
         await service.complete_github(
             state=auth_state,
@@ -2700,6 +2749,38 @@ async def test_repository_bundle_ignores_members_outside_the_pinned_tree(monkeyp
         assert archive.getnames() == ["README.md"]
 
 
+async def test_github_repositories_follow_every_installation_page(monkeypatch):
+    names = [f"example-org/repo-{index:03d}" for index in range(1, 151)]
+    requests: list[httpx.Request] = []
+
+    async def github(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.url.path == "/installation/repositories"
+        page = int(request.url.params.get("page", "1"))
+        per_page = int(request.url.params["per_page"])
+        chunk = names[(page - 1) * per_page : page * per_page]
+        headers = {}
+        if page * per_page < len(names):
+            headers["link"] = (
+                f'<https://api.github.com/installation/repositories?page={page + 1}>; rel="next"'
+            )
+        return httpx.Response(
+            200,
+            headers=headers,
+            json={
+                "total_count": len(names),
+                "repositories": [{"full_name": name, "private": True} for name in chunk],
+            },
+        )
+
+    async with repository_service(monkeypatch, github) as service:
+        options = await service.github_repositories(project_id=PROJECT_ID)
+        receipt = service._database.calls[-1]
+    assert [option.id for option in options] == names
+    assert len(requests) == 2
+    assert receipt["response_summary"] == {"count": 150, "truncated": False}
+
+
 # ---------------------------------------------------------------- Google Ads (ads.google)
 
 ADS_CID = "1234567890"
@@ -2957,6 +3038,58 @@ async def test_connect_google_ads_already_invited_falls_back_to_the_link_status(
         "code": "ManagerLinkError.ALREADY_MANAGED_BY_THIS_MANAGER"
     }
     assert backend.requests[-1][1]["query"].startswith("SELECT customer_client_link")
+
+
+@pytest.mark.asyncio
+async def test_connect_google_ads_to_another_account_cancels_the_pending_invitation() -> None:
+    backend = AdsBackend()
+    service, _ = ads_service(backend)
+    await service.connect_google_ads(
+        project_id=PROJECT_ID, customer_id=ADS_CID, clerk_user_id=USER_ID
+    )
+    backend.requests.clear()
+    connection = await service.connect_google_ads(
+        project_id=PROJECT_ID, customer_id="222-222-2222", clerk_user_id=USER_ID
+    )
+    operations = [
+        body["operation"]
+        for path, body, _ in backend.requests
+        if path.endswith("customerClientLinks:mutate")
+    ]
+    assert operations == [
+        {
+            "update": {
+                "resourceName": f"customers/{ADS_MCC}/customerClientLinks/{ADS_CID}~555",
+                "status": "CANCELED",
+            },
+            "updateMask": "status",
+        },
+        {"create": {"clientCustomer": "customers/2222222222", "status": "PENDING"}},
+    ]
+    assert connection.external_account_id == "2222222222"
+    assert connection.configuration["link_status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_connect_google_ads_refuses_another_account_once_the_invitation_was_accepted() -> (
+    None
+):
+    backend = AdsBackend()
+    service, database = ads_service(backend)
+    await service.connect_google_ads(
+        project_id=PROJECT_ID, customer_id=ADS_CID, clerk_user_id=USER_ID
+    )
+    # The founder accepted in Google Ads, but Tin has not checked the link since.
+    backend.link_status = "ACTIVE"
+    backend.requests.clear()
+    with pytest.raises(IntegrationAuthorizationError, match="Disconnect the linked"):
+        await service.connect_google_ads(
+            project_id=PROJECT_ID, customer_id="222-222-2222", clerk_user_id=USER_ID
+        )
+    assert not any(path.endswith("customerClientLinks:mutate") for path, _, _ in backend.requests)
+    connection = database.connections[(PROJECT_ID, ADS_PROVIDER)]
+    assert connection.external_account_id == ADS_CID
+    assert connection.configuration["link_status"] == "active"
 
 
 @pytest.mark.asyncio
