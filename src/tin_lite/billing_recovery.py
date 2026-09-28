@@ -3,6 +3,7 @@
 import asyncio
 import logging
 
+import httpx
 from temporalio.common import WorkflowIDReusePolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
@@ -40,15 +41,20 @@ async def recover_dispatches(runtime, settings):
 async def billing_reconciliation_loop(runtime, settings):
     if runtime.database.billing is None:
         return
-    while True:
-        try:
-            studio = getattr(runtime, "studio", None)
-            if studio is not None:
-                await studio.reconcile_usage()
-            await runtime.database.billing.reconcile()
-            await recover_dispatches(runtime, settings)
-            await StripePayments(billing=runtime.database.billing, settings=settings).reconcile()
-        except Exception:
-            # No raw provider exceptions, payment details or credentials in logs.
-            logger.warning("Billing reconciliation is pending; it will retry.")
-        await asyncio.sleep(15)
+    # One Stripe connection pool for the loop's lifetime; cancellation on shutdown closes it.
+    async with httpx.AsyncClient(timeout=25) as stripe_client:
+        payments = StripePayments(
+            billing=runtime.database.billing, settings=settings, client=stripe_client
+        )
+        while True:
+            try:
+                studio = getattr(runtime, "studio", None)
+                if studio is not None:
+                    await studio.reconcile_usage()
+                await runtime.database.billing.reconcile()
+                await recover_dispatches(runtime, settings)
+                await payments.reconcile()
+            except Exception:
+                # No raw provider exceptions, payment details or credentials in logs.
+                logger.warning("Billing reconciliation is pending; it will retry.")
+            await asyncio.sleep(15)
