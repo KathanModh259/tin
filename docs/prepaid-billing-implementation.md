@@ -107,7 +107,8 @@ subscription, key, or webhook was changed.
 - Quote, reserve and run creation share the normal HTTP/MCP start contract. Each paid unit
   rechecks project membership and current spending limits. A scheduled occurrence also needs
   a current saved-workflow creator and explicit `schedule_max_nanos` standing authority.
-  The current UI limit editor does not expose that additional scheduling allowance.
+  The Billing limit editor sets it as "Per scheduled run"; blank keeps paid schedules off.
+  Hosted default policies start with $10.
 - A start blocked by project limits keeps the `project_limit` code (HTTP 402) and names the one
   limit that applies: no spending policy, the per-run limit against the estimate, this month's
   limit with the amount already committed, or the concurrent-run limit with the active count.
@@ -136,6 +137,10 @@ subscription, key, or webhook was changed.
   has not arrived.
 - Reconciliation runs in the existing switchboard process; it is not another workflow engine.
   A standalone worker without that process does not supply the billing reconciliation loop.
+- Checkout sessions expire 45 minutes after the payment request (Stripe's minimum is 30), so an
+  abandoned top-up stops being pending within the hour. Pending checkouts are reread from Stripe
+  on a per-payment backoff: every 30 seconds for the first 2 minutes, every 2 minutes to 10,
+  every 10 minutes to an hour, then every 30 minutes. Webhooks remain the primary path.
 - No automatic top-up, subscriptions, promotional credit, live-mode account, retroactive charge,
   or changed Strangeloop resource is part of this slice.
 
