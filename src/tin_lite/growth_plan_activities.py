@@ -30,6 +30,7 @@ from tin_lite.publication import OutputCheckpoint, OutputConflictError, Publicat
 from tin_lite.usage_capture import external_usage_scope
 
 MAX_MEMORY_BYTES = 12_000
+UNUSABLE = "The plan's model results were unusable. Nothing was saved; try again."
 WEB_READER = (
     "You read a business's public site for a colleague who could not fetch it. Use web search to "
     "open the homepage and, once each, its pricing, docs, about, blog, changelog and FAQ pages; if "
@@ -100,7 +101,9 @@ class GrowthPlanActivities:
                         commit_sha=project.memory_commit_sha,
                         path=project.memory_index_path,
                     )
-                    memory = content[:MAX_MEMORY_BYTES].decode("utf-8", "replace")
+                    memory = (
+                        content[:MAX_MEMORY_BYTES].decode("utf-8", "replace").replace("\x00", "")
+                    )
                 from tin_lite.onboarding import onboarding_tin_state
 
                 # The plan must only send an agent to doors that open today.
@@ -226,6 +229,13 @@ class GrowthPlanActivities:
             await self.db.complete_effect(conn, execution_key=key, result={"data": data})
             return data
 
+    async def _write_failed(self, run, message):
+        """Receipt why nothing was written, so the run's failure says that instead of a guess."""
+        key = f"{run.id}:plan_write_failed"
+        async with self.db.effect_lock(key, plan.KEY) as (conn, _saved):
+            await self.db.start_effect(conn, execution_key=key, operation=plan.KEY)
+            await self.db.fail_effect(conn, execution_key=key, error_message=message)
+
     @activity.defn(name="growth_plan_write")
     async def write(self, run_id: str):
         run = await self.active(run_id)
@@ -259,12 +269,17 @@ class GrowthPlanActivities:
             result = await plan.build_plan(
                 apply_priority(inputs), site, site_text, context["today"], generate
             )
-            plan.validate_plan(result["plan"], context["tin_state"])
         except (plan.UnusableModelResult, KeyError, TypeError, ValueError, LookupError):
-            raise ApplicationError(
-                "The plan's model results were unusable. Nothing was saved; try again.",
-                non_retryable=True,
-            ) from None
+            await self._write_failed(run, UNUSABLE)
+            raise ApplicationError(UNUSABLE, non_retryable=True) from None
+        try:
+            plan.validate_plan(result["plan"], context["tin_state"])
+        except ValueError as exc:
+            # validate_plan's reasons are fixed strings written by code, never model output.
+            message = f"The plan failed Tin's final check: {exc}. Nothing was saved; try again."
+            activity.logger.warning("growth plan %s refused before saving: %s", run.id, exc)
+            await self._write_failed(run, message)
+            raise ApplicationError(message, non_retryable=True) from None
         key = f"{run.id}:plan_document"
         async with self.db.effect_lock(key, plan.KEY) as (conn, saved):
             if saved and saved.status == "completed":
@@ -376,10 +391,15 @@ class GrowthPlanActivities:
     async def failure(self, run_id: str):
         run = await self.db.get_run(UUID(run_id))
         if run and run.executor == plan.KEY:
-            await self.db.project_failure(
-                run_id=run.id,
-                error_message=(
-                    "The growth plan could not confirm completion. "
-                    "Check Files for a saved result before trying again."
-                ),
+            message = (
+                "The growth plan could not confirm completion. "
+                "Check Files for a saved result before trying again."
             )
+            # Until the save step starts, no plan file can exist: say so instead of sending the
+            # founder to Files, and keep the receipted reason when the write step recorded one.
+            if await self.db.get_effect(f"{run.id}:plan_artifact_persist") is None:
+                failed = await self.db.get_effect(f"{run.id}:plan_write_failed")
+                message = (failed and failed.error_message) or (
+                    "The growth plan could not be written. Nothing was saved; try again."
+                )
+            await self.db.project_failure(run_id=run.id, error_message=message)
