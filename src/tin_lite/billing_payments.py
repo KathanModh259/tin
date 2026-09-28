@@ -265,7 +265,7 @@ class StripePayments:
             # Schedule the next read before this one, so a failing row also backs off.
             # A paid or expired payment leaves 'pending' and is never selected again.
             await self.db.pool.execute(
-                "UPDATE billing_payments SET next_reconcile_at=now()+$2 WHERE id=$1",
+                "UPDATE billing_payments SET next_reconcile_at=now()+$2::interval WHERE id=$1",
                 payment["id"],
                 reconcile_interval(datetime.now(UTC) - payment["created_at"]),
             )

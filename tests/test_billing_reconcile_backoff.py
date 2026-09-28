@@ -98,7 +98,7 @@ async def pending_checkout(f, age=timedelta(minutes=1)):
         workspace_id=f.project.workspace_id, actor=ACTOR, amount_cents=2500, request_id=uuid4()
     )
     await f.db.pool.execute(
-        "UPDATE billing_payments SET created_at=now()-$2 WHERE id=$1",
+        "UPDATE billing_payments SET created_at=now()-$2::interval WHERE id=$1",
         UUID(payment["id"]),
         age,
     )
