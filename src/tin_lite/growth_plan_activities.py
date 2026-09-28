@@ -100,7 +100,9 @@ class GrowthPlanActivities:
                         commit_sha=project.memory_commit_sha,
                         path=project.memory_index_path,
                     )
-                    memory = content[:MAX_MEMORY_BYTES].decode("utf-8", "replace")
+                    memory = (
+                        content[:MAX_MEMORY_BYTES].decode("utf-8", "replace").replace("\x00", "")
+                    )
                 from tin_lite.onboarding import onboarding_tin_state
 
                 # The plan must only send an agent to doors that open today.
