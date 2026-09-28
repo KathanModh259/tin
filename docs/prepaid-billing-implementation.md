@@ -107,7 +107,8 @@ subscription, key, or webhook was changed.
 - Quote, reserve and run creation share the normal HTTP/MCP start contract. Each paid unit
   rechecks project membership and current spending limits. A scheduled occurrence also needs
   a current saved-workflow creator and explicit `schedule_max_nanos` standing authority.
-  The current UI limit editor does not expose that additional scheduling allowance.
+  The Billing limit editor sets it as "Per scheduled run"; blank keeps paid schedules off.
+  Hosted default policies start with $10.
 - A start blocked by project limits keeps the `project_limit` code (HTTP 402) and names the one
   limit that applies: no spending policy, the per-run limit against the estimate, this month's
   limit with the amount already committed, or the concurrent-run limit with the active count.
