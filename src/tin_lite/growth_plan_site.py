@@ -127,12 +127,9 @@ async def _fetch(client, url, resolver):
                 if len(body) > MAX_BODY_BYTES:
                     break
             encoding = response.charset_encoding or "utf-8"
-            return (
-                url,
-                response.status_code,
-                response.headers.get("content-type", ""),
-                bytes(body[:MAX_BODY_BYTES]).decode(encoding, "replace"),
-            )
+            # Postgres text and jsonb refuse NUL, and the pages end up in a run's receipt.
+            text = bytes(body[:MAX_BODY_BYTES]).decode(encoding, "replace").replace("\x00", "")
+            return url, response.status_code, response.headers.get("content-type", ""), text
         finally:
             await response.aclose()
     raise ValueError("redirect_limit")
@@ -151,7 +148,14 @@ async def _get(client, url, resolver):
             "error": kind,
             "seconds": round(time.monotonic() - started, 1),
         }
-    html = text if "html" in (content_type or "html") or url.endswith(".txt") else ""
+    if url.endswith(".txt"):
+        # llms.txt counts only when served as plain text: a missing one is often a binary 404
+        # or the app shell a single-page host returns for every path.
+        kind = content_type or "text/plain"
+        keep = status == 200 and kind.startswith("text/") and "html" not in kind
+    else:
+        keep = "html" in (content_type or "html")
+    html = text if keep else ""
     page = {
         "url": final_url,
         "status": status,

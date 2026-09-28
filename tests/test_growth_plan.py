@@ -16,7 +16,7 @@ from tin_lite.code_storage import CodeStorage
 from tin_lite.domain import GROWTH_ONBOARDING_PLAN_PATH, GROWTH_ONBOARDING_PLAN_WORKFLOW_NAME
 from tin_lite.growth_onboarding import plan_block, plan_picks, plan_view
 from tin_lite.growth_plan_assets import score as scorer
-from tin_lite.growth_plan_site import evidence_text, read_site
+from tin_lite.growth_plan_site import _get, evidence_text, read_site
 from tin_lite.public_workflows import PUBLIC_WORKFLOWS
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -774,6 +774,35 @@ async def test_site_reader_reads_pages_the_sitemap_and_reports_a_js_shell():
     )
     assert shell["verdict"] == "thin"
     assert evidence_text({"verdict": "none", "pages": []}).startswith("No product_url")
+
+
+async def test_site_reader_keeps_nul_bytes_and_error_bodies_out_of_the_receipt():
+    # A live site served a binary 404 for /llms.txt; its NUL bytes made Postgres refuse the receipt.
+    def handler(request):
+        if request.url.path == "/llms.txt":
+            return httpx.Response(
+                404, content=b"\x00\x01PK\x00binary", headers={"content-type": "text/plain"}
+            )
+        if request.url.path == "/docs.txt":
+            return httpx.Response(
+                200, content=b"<html>app shell</html>", headers={"content-type": "text/html"}
+            )
+        return httpx.Response(
+            200,
+            content=b"<html><title>Loc\x00In</title><p>" + b"Local SEO. " * 200 + b"</p></html>",
+            headers={"content-type": "text/html"},
+        )
+
+    resolve = resolver_for({"locin.example": "93.184.216.34"})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        site = await read_site("https://locin.example", client=client, resolver=resolve)
+        shell = await _get(client, "https://locin.example/docs.txt", resolve)
+
+    assert "\x00" not in json.dumps(site)
+    assert site["pages"][0]["title"] == "LocIn"
+    llms = next(p for p in site["pages"] if p["kind"] == "llms")
+    assert llms["status"] == 404 and llms["text"] == ""
+    assert shell["status"] == 200 and shell["text"] == ""
 
 
 # ---------------------------------------------------------------- activities (database-backed)
