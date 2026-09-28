@@ -21,12 +21,34 @@ EVENTS = (
     "charge.dispute.created",
     "charge.dispute.closed",
 )
+# Stripe accepts a Checkout expiry 30 minutes to 24 hours after creation. The expiry is
+# derived from the durable request, so an idempotent retry sends identical parameters; the
+# margin over 30 minutes is how long a session-less request can still be retried.
+CHECKOUT_LIFETIME = timedelta(minutes=45)
+# Open checkouts are reread by age, so a lost completion webhook still credits within about
+# a minute while an abandoned session costs a few reads instead of one every pass.
+RECONCILE_BACKOFF = (
+    (timedelta(minutes=2), timedelta(seconds=30)),
+    (timedelta(minutes=10), timedelta(minutes=2)),
+    (timedelta(hours=1), timedelta(minutes=10)),
+)
+RECONCILE_MAX_INTERVAL = timedelta(minutes=30)
+
+
+def reconcile_interval(age):
+    """Delay before the next provider read of a payment that is still pending."""
+    for below, interval in RECONCILE_BACKOFF:
+        if age < below:
+            return interval
+    return RECONCILE_MAX_INTERVAL
 
 
 class StripePayments:
-    def __init__(self, *, billing, settings, transport=None):
+    def __init__(self, *, billing, settings, transport=None, client=None):
         self.billing, self.db, self.settings = billing, billing.db, settings
         self.transport = transport
+        # A long-lived caller (the reconciliation loop) owns and closes a shared client.
+        self.client = client
 
     def key(self):
         value = getattr(self.settings, "stripe_secret_key", None)
@@ -44,10 +66,12 @@ class StripePayments:
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
         try:
-            async with httpx.AsyncClient(transport=self.transport, timeout=25) as client:
-                response = await client.request(
-                    method, f"https://api.stripe.com/v1/{path}", headers=headers, data=data
-                )
+            url = f"https://api.stripe.com/v1/{path}"
+            if self.client is not None:
+                response = await self.client.request(method, url, headers=headers, data=data)
+            else:
+                async with httpx.AsyncClient(transport=self.transport, timeout=25) as client:
+                    response = await client.request(method, url, headers=headers, data=data)
             if allow_missing and response.status_code == 404:
                 return None
             if response.status_code >= 400:
@@ -134,6 +158,7 @@ class StripePayments:
                 "line_items[0][price_data][product]": product,
                 "line_items[0][price_data][unit_amount]": str(amount_cents),
                 "line_items[0][quantity]": "1",
+                "expires_at": str(int((payment["created_at"] + CHECKOUT_LIFETIME).timestamp())),
                 "invoice_creation[enabled]": "true",
                 "invoice_creation[invoice_data][metadata][tin_product]": "tin-lite",
                 "invoice_creation[invoice_data][metadata][tin_payment_id]": str(payment["id"]),
@@ -232,9 +257,18 @@ class StripePayments:
             return
         payments = await self.db.pool.fetch(
             """SELECT * FROM billing_payments WHERE status='pending'
-               AND created_at<now()-interval '30 seconds' ORDER BY created_at LIMIT 20"""
+               AND created_at<now()-interval '30 seconds'
+               AND (next_reconcile_at IS NULL OR next_reconcile_at<=now())
+               ORDER BY created_at LIMIT 20"""
         )
         for payment in payments:
+            # Schedule the next read before this one, so a failing row also backs off.
+            # A paid or expired payment leaves 'pending' and is never selected again.
+            await self.db.pool.execute(
+                "UPDATE billing_payments SET next_reconcile_at=now()+$2 WHERE id=$1",
+                payment["id"],
+                reconcile_interval(datetime.now(UTC) - payment["created_at"]),
+            )
             if payment["stripe_session_id"]:
                 obj = await self.request("GET", f"checkout/sessions/{payment['stripe_session_id']}")
                 if (
