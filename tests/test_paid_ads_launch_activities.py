@@ -581,23 +581,15 @@ async def test_a_lost_enable_answer_reads_the_campaign_back_and_goes_live_when_i
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("status", "says"),
-    [
-        (None, "may already be running"),
-        ("PAUSED", "is paused in your account"),
-    ],
-)
-async def test_a_lost_enable_answer_only_claims_paused_when_the_account_says_so(status, says):
+async def test_a_lost_enable_answer_only_claims_paused_when_the_account_says_so():
     script = Script()
     script.enable_lost = True
     activities, db, _, script, _, integrations, _ = await fixture(script=script)
     run_id, _ = await run_through_approval(activities, db)
-    script.status_after_enable = status
+    script.status_after_enable = "PAUSED"
     with pytest.raises(ApplicationError) as failed:
         await activities.apply(run_id)
-    assert says in str(failed.value)
-    assert ("paused" in str(failed.value)) is (status == "PAUSED")
+    assert "is paused in your account" in str(failed.value)
     failure = await activities._result(run_id, "failure")
     assert failure["stage"] == "enable" and failure["detail"] == str(failed.value)
     assert await activities._result(run_id, "applied") is None
@@ -605,6 +597,41 @@ async def test_a_lost_enable_answer_only_claims_paused_when_the_account_says_so(
     with pytest.raises(ApplicationError):
         await activities.apply(run_id)
     assert len(enables(script)) == 1 and integrations.google_ads_call.await_count == count
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_lost_enable_stays_live_for_the_monitor_and_says_it_may_run():
+    script = Script()
+    script.enable_lost = True
+    activities, db, storage, script, _, integrations, _ = await fixture(script=script)
+    run_id, _ = await run_through_approval(activities, db)
+    # Neither the switch's answer nor the read-back arrives: the campaign may be spending.
+    await activities.apply(run_id)
+    assert activities.key(run_id, "apply:enable_check") in launch_receipts(db)
+    assert await activities._result(run_id, "failure") is None
+    applied = await activities._result(run_id, "applied")
+    assert applied["enable_unconfirmed"] is True and applied["enabled"] is None
+    assert applied["resources"]["campaign"] == f"customers/{CUSTOMER}/campaigns/2"
+    await activities.publish(run_id)
+    campaign = db.campaigns[db.run.id]
+    # What ads.monitor selects: a succeeded launch whose row is live with a campaign id.
+    assert db.run.status is RunStatus.SUCCEEDED and not db.failures
+    assert campaign["status"] == "live" and campaign["external_campaign_id"] == "2"
+    assert campaign["enabled_at"]
+    assert "may be running" in db.completions[0]["summary"]
+    assert "Tin keeps watching it" in db.completions[0]["summary"]
+    results = paid_ads_launch.paths(run_id, paid_ads_launch.RESULT_DOCS)
+    tree = storage.repo.trees[storage.repo.head]
+    saved = json.loads(tree[results["campaign.json"]][1])
+    assert saved["enabled"] is None and saved["campaign_id"] == "2"
+    result = tree[results["RESULT.md"]][1].decode()
+    assert "may already be running" in result and "Tin keeps watching it" in result
+    assert "The campaign is on" not in result and "left paused" not in result
+    count = integrations.google_ads_call.await_count
+    await activities.apply(run_id)
+    await activities.publish(run_id)
+    assert len(enables(script)) == 1 and integrations.google_ads_call.await_count == count
+    assert len(db.completions) == 1
 
 
 @pytest.mark.asyncio
