@@ -508,6 +508,55 @@ def test_voice_pairs_each_script_step_with_its_own_keyframe(
     ]
 
 
+def _run_voice(voice, monkeypatch, tmp_path: Path, script, log, requested: list[str]) -> None:
+    (tmp_path / "script.json").write_text(json.dumps(script))
+    (tmp_path / "log.json").write_text(json.dumps(log))
+
+    def request_voice(text, *args):
+        requested.append(text)
+        return {"audio_base64": base64.b64encode(b"mp3").decode(), "words": []}
+
+    monkeypatch.setattr(voice, "request_voice", request_voice)
+    monkeypatch.setattr(voice, "probe_duration", lambda path: 1.5)
+    monkeypatch.setattr(sys, "argv", ["voice.py", str(tmp_path)])
+    voice.main()
+
+
+def test_voice_pairs_a_log_without_script_idx_by_position(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    voice = _load_studio_tool("voice", monkeypatch)
+    script = {"steps": [{"goto": "/", "vo": "Line A"}, {"type": {}}, {"click": {}, "vo": "Line C"}]}
+    # Written by capture before it recorded script_idx.
+    log = {
+        "steps": [
+            {"idx": 0, "kind": "goto"},
+            {"idx": 1, "kind": "focus"},
+            {"idx": 2, "kind": "typing"},
+            {"idx": 3, "kind": "pre-click"},
+            {"idx": 4, "kind": "click"},
+        ]
+    }
+    requested: list[str] = []
+    _run_voice(voice, monkeypatch, tmp_path, script, log, requested)
+    assert requested == ["Line A", "Line C"]
+    clips = json.loads((tmp_path / "vo.json").read_text())["clips"]
+    assert [(clip["step_idx"], clip["text"]) for clip in clips] == [(0, "Line A"), (4, "Line C")]
+
+
+def test_voice_rejects_a_missing_keyframe_before_any_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    voice = _load_studio_tool("voice", monkeypatch)
+    script = {"steps": [{"goto": "/", "vo": "Line A"}, {"hold": 500, "vo": "Line B"}]}
+    log = {"steps": [{"idx": 0, "kind": "goto", "script_idx": 0}, {"idx": 1, "kind": "hold"}]}
+    requested: list[str] = []
+    with pytest.raises(SystemExit, match=r"script steps \[1\] have no keyframe"):
+        _run_voice(voice, monkeypatch, tmp_path, script, log, requested)
+    assert requested == []
+    assert not (tmp_path / "vo.json").exists()
+
+
 def test_render_plays_a_type_step_line_on_its_focus_keyframe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

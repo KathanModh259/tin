@@ -176,16 +176,28 @@ def main():
     if os.path.exists(vo_path):
         for clip in json.load(open(vo_path)).get("clips", []):
             previous[clip["step_idx"]] = clip
-    content = {s.get("script_idx"): s for s in log["steps"] if s["kind"] in CONTENT_KINDS}
+    content = [s for s in log["steps"] if s["kind"] in CONTENT_KINDS]
+    if any("script_idx" in s for s in log["steps"]):
+        keyframes = {s.get("script_idx"): s for s in content}
+    else:
+        # A log.json from before capture recorded script_idx; each step logged one content
+        # keyframe, in order.
+        keyframes = dict(enumerate(content))
+    # Check every voiced step before the first paid request.
+    missing = [
+        i
+        for i, sstep in enumerate(script["steps"])
+        if (sstep.get("vo") or "").strip() and i not in keyframes
+    ]
+    if missing:
+        raise SystemExit(f"script steps {missing} have no keyframe in log.json; run capture again")
     out = {"voice": voice, "style": style, "language": language, "clips": []}
     failed = []
     for i, sstep in enumerate(script["steps"]):
         line = (sstep.get("vo") or "").strip()
         if not line:
             continue
-        kstep = content.get(i)
-        if kstep is None:
-            raise SystemExit(f"script step {i} has no keyframe in log.json; run capture again")
+        kstep = keyframes[i]
         f = os.path.join(d, "vo", f"vo{i:02d}.mp3")
         kept = previous.get(kstep["idx"])
         # Stable across CLI retries/restarts, including an ambiguous HTTP response.
